@@ -5,7 +5,7 @@
 
 namespace facebook { namespace cuda {
 
-// A simple pair type for CUDA device usage
+/// A simple pair type for CUDA device usage
 template <typename K, typename V>
 struct Pair {
   __host__ __device__ __forceinline__ Pair() {

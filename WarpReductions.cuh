@@ -8,7 +8,7 @@
 
 namespace facebook { namespace cuda {
 
-// Sums a register value across all warp threads
+/// Sums a register value across all warp threads
 template <typename T>
 __device__ __forceinline__ T warpReduceSum(T val) {
   for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
@@ -18,7 +18,7 @@ __device__ __forceinline__ T warpReduceSum(T val) {
   return val;
 }
 
-// Finds the maximum `val` across the warp
+/// Finds the maximum `val` across the warp
 template <typename T>
 __device__ __forceinline__ T warpReduceMax(T val) {
   for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
@@ -28,7 +28,7 @@ __device__ __forceinline__ T warpReduceMax(T val) {
   return val;
 }
 
-// Finds the minimum `val` across the warp
+/// Finds the minimum `val` across the warp
 template <typename T>
 __device__ __forceinline__ T warpReduceMin(T val) {
   for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
@@ -38,7 +38,7 @@ __device__ __forceinline__ T warpReduceMin(T val) {
   return val;
 }
 
-// Bitwise or reduction across the warp
+/// Bitwise or reduction across the warp
 template <typename T>
 __device__ __forceinline__ T warpReduceBitwiseOr(T val) {
   for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {

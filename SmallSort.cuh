@@ -11,12 +11,16 @@
 
 #include <assert.h>
 
-// Sorting routines for in-register warp shuffle sorting. Can handle
-// arbitrary sizes via recursive decomposition as long as you have
-// enough registers allocated for the problem, though efficiency dies
-// as you get significantly larger than 128.
-// Template instantiations are provided for input sizes 1-128 (4 *
-// warpSize).
+/** @file
+
+    Sorting routines for in-register warp shuffle sorting. Can
+    handle arbitrary sizes via recursive decomposition as long as you
+    have enough registers allocated for the problem, though efficiency
+    dies as you get significantly larger than 128.
+
+    Template instantiations are provided for input sizes 1-128 (`4 * warpSize`).
+*/
+
 namespace facebook { namespace cuda {
 
 namespace detail {

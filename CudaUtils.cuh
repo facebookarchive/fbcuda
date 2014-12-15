@@ -6,21 +6,27 @@
 
 namespace facebook { namespace cuda {
 
-// Computes ceil(a / b)
+/**
+   Computes ceil(a / b)
+*/
 template <typename T>
 __host__ __device__ __forceinline__ T ceil(T a, T b) {
   return (a + b - 1) / b;
 }
 
-// Returns the current thread's warp ID
+/**
+   Returns the current thread's warp ID
+*/
 __device__ __forceinline__ int getWarpId() {
   return (threadIdx.z * blockDim.y * blockDim.x +
           threadIdx.y * blockDim.x +
           threadIdx.x) / warpSize;
 }
 
-// Pointer comparison using the PTX intrinsic; min() doesn't work for
-// T*
+/**
+   Pointer comparison using the PTX intrinsic; min() doesn't work for
+   T*.
+*/
 template <typename T>
 __device__ __forceinline__ T ptrMin(T a, T b) {
   cuda_static_assert(sizeof(T) == 8);
@@ -30,8 +36,10 @@ __device__ __forceinline__ T ptrMin(T a, T b) {
   return ptr;
 }
 
-// Pointer comparison using the PTX intrinsic; max() doesn't work for
-// T*
+/**
+  Pointer comparison using the PTX intrinsic; max() doesn't work for
+  T*
+*/
 template <typename T>
 __device__ __forceinline__ T ptrMax(T a, T b) {
   cuda_static_assert(sizeof(T) == 8);
@@ -41,53 +49,67 @@ __device__ __forceinline__ T ptrMax(T a, T b) {
   return ptr;
 }
 
-// Return the current thread's lane in the warp
+/**
+   Return the current thread's lane in the warp
+*/
 __device__ __forceinline__ int getLaneId() {
   int laneId;
   asm("mov.s32 %0, %laneid;" : "=r"(laneId) );
   return laneId;
 }
 
-// Return a bitmask with bits set in positions less than the current
-// thread's lane number in the warp.
+/**
+   Return a bitmask with bits set in positions less than the current
+   thread's lane number in the warp.
+*/
 __device__ __forceinline__ unsigned getLaneMaskLt() {
   unsigned mask;
   asm("mov.u32 %0, %%lanemask_lt;" : "=r"(mask));
   return mask;
 }
 
-// Return a bitmask with bits set in positions less than or equal to
-// the current thread's lane number in the warp.
+/**
+   Return a bitmask with bits set in positions less than or equal to
+   the current thread's lane number in the warp.
+*/
 __device__ __forceinline__ unsigned getLaneMaskLe() {
   unsigned mask;
   asm("mov.u32 %0, %%lanemask_le;" : "=r"(mask));
   return mask;
 }
 
-// Return a bitmask with bits set in positions greater than the current
-// thread's lane number in the warp.
+/**
+   Return a bitmask with bits set in positions greater than the
+   current thread's lane number in the warp.
+*/
 __device__ __forceinline__ unsigned getLaneMaskGt() {
   unsigned mask;
   asm("mov.u32 %0, %%lanemask_gt;" : "=r"(mask));
   return mask;
 }
 
-// Return a bitmask with bits set in positions greater than or equal
-// to the current thread's lane number in the warp.
+/**
+   Return a bitmask with bits set in positions greater than or equal
+   to the current thread's lane number in the warp.
+*/
 __device__ __forceinline__ unsigned getLaneMaskGe() {
   unsigned mask;
   asm("mov.u32 %0, %%lanemask_ge;" : "=r"(mask));
   return mask;
 }
 
-// Extract a single bit at `pos` from `val`
+/**
+   Extract a single bit at `pos` from `val`
+*/
 __device__ __forceinline__ int getBit(int val, int pos) {
   int ret;
   asm("bfe.u32 %0, %1, %2, 1;" : "=r"(ret) : "r"(val), "r"(pos));
   return ret;
 }
 
-// Insert a single bit into `val` at position `pos`
+/**
+   Insert a single bit into `val` at position `pos`
+*/
 __device__ __forceinline__
 unsigned setBit(unsigned val, unsigned toInsert, int pos) {
   unsigned ret;
@@ -96,7 +118,9 @@ unsigned setBit(unsigned val, unsigned toInsert, int pos) {
   return ret;
 }
 
-// Extract a bit field of length `len` at `pos` from `val`
+/**
+   Extract a bit field of length `len` at `pos` from `val`
+*/
 __device__ __forceinline__
 unsigned getBitfield(unsigned val, int pos, int len) {
   unsigned ret;
@@ -104,7 +128,9 @@ unsigned getBitfield(unsigned val, int pos, int len) {
   return ret;
 }
 
-// Extract a bit field of length `len` at `pos` from `val`
+/**
+   Extract a bit field of length `len` at `pos` from `val`
+*/
 __device__ __forceinline__
 unsigned long getBitfield(unsigned long val, int pos, int len) {
   unsigned long ret;
@@ -112,8 +138,10 @@ unsigned long getBitfield(unsigned long val, int pos, int len) {
   return ret;
 }
 
-// Insert `len` bits of `toInsert` into `val` starting at position
-// `pos`
+/**
+   Insert `len` bits of `toInsert` into `val` starting at position
+   `pos`
+*/
 __device__ __forceinline__
 unsigned setBitfield(unsigned val, unsigned toInsert, int pos, int len) {
   unsigned ret;
@@ -122,8 +150,10 @@ unsigned setBitfield(unsigned val, unsigned toInsert, int pos, int len) {
   return ret;
 }
 
-// Insert `len` bits of `toInsert` into `val` starting at position
-// `pos`
+/**
+   Insert `len` bits of `toInsert` into `val` starting at position
+   `pos`
+*/
 __device__ __forceinline__
 unsigned long setBitfield(unsigned long val, unsigned toInsert,
                           int pos, int len) {

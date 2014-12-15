@@ -14,18 +14,18 @@
 #include <math_constants.h>
 #include <stdio.h>
 
-//
-// CUDA device code routines for:
-// -finding all top K float elements in descending order in a set
-// using the above top-Kth radix selection plus warp coherent bitonic
-// sorting.
-//
+/** @file
+    
+    CUDA device code routines for finding all top K float elements in
+    descending order in a set using the above top-Kth radix selection
+    plus warp coherent bitonic sorting.
+*/
 namespace facebook { namespace cuda {
 
 namespace detail {
 
-// Returns the index into the array that this lane will write. If this
-// lane is not responsible for writing a value, this will return -1.
+/// Returns the index into the array that this lane will write. If this
+/// lane is not responsible for writing a value, this will return -1.
 __device__ __forceinline__ int
 laneWillWrite(float val, float topK, int& topKToWrite, int& next) {
   // Do we have a < top K value? Those must be written.
@@ -72,13 +72,13 @@ laneWillWrite(float val, float topK, int& topKToWrite, int& next) {
   return getBit(warpWillWrite, getLaneId()) ? writeIndex : -1;
 }
 
-// For a given warp, find and write out the top-k highest floating
-// point values in [start, end) to [out, out + k). The list written
-// out occurs in the original source order (by original
-// index). Returns the k-th highest element seen.
-// Handles all floats except NaNs.
-// Implementation for large arrays such that there are more elements
-// than warp threads.
+/// For a given warp, find and write out the top-k highest floating
+/// point values in [start, end) to [out, out + k). The list written
+/// out occurs in the original source order (by original
+/// index). Returns the k-th highest element seen.
+/// Handles all floats except NaNs.
+/// Implementation for large arrays such that there are more elements
+/// than warp threads.
 __device__ float
 warpFindTopKElementsIndexOrder(const DeviceTensor<float, 1>& data,
                                DeviceTensor<float, 1>& out,
@@ -113,8 +113,8 @@ warpFindTopKElementsIndexOrder(const DeviceTensor<float, 1>& data,
   return topKthElement.k;
 }
 
-// Version of warpFindTopKElementsUnorderedLarge, except also writes
-// out the K indices chosen from `data` into `indices`.
+/// Version of warpFindTopKElementsUnorderedLarge, except also writes
+/// out the K indices chosen from `data` into `indices`.
 template <typename IndexType>
 __device__ float
 warpFindTopKElementsIndexOrder(const DeviceTensor<float, 1>& data,
@@ -152,10 +152,10 @@ warpFindTopKElementsIndexOrder(const DeviceTensor<float, 1>& data,
   return topKthElement.k;
 }
 
-// For a given warp, find and write out the top-k highest floating
-// point values in [start, end) to [out, out + k). The list written
-// out is ordered.
-// Handles all floats except NaNs.
+/// For a given warp, find and write out the top-k highest floating
+/// point values in [start, end) to [out, out + k). The list written
+/// out is ordered.
+/// Handles all floats except NaNs.
 __device__ void
 warpFindTopKElementsValueOrderSmall(const DeviceTensor<float, 1>& data,
                                     DeviceTensor<float, 1>& out,
@@ -187,8 +187,8 @@ warpFindTopKElementsValueOrderSmall(const DeviceTensor<float, 1>& data,
 #undef HANDLE_SIZE
 }
 
-// Version of warpFindTopKElementsOrderedSmall that also writes out
-// the indices in `data` of the K elements chosen into `indices`.
+/// Version of warpFindTopKElementsOrderedSmall that also writes out
+/// the indices in `data` of the K elements chosen into `indices`.
 template <typename IndexType>
 __device__ void
 warpFindTopKElementsValueOrderSmall(const DeviceTensor<float, 1>& data,
@@ -227,12 +227,12 @@ warpFindTopKElementsValueOrderSmall(const DeviceTensor<float, 1>& data,
 #undef HANDLE_SIZE
 }
 
-// For a given warp, find and write out the top-k highest floating
-// point values in [start, end) to [out, out + k). The list written
-// out is ordered.
-// Handles all floats except NaNs.
-// Implementation for large arrays such that there are more elements
-// than warp threads.
+/// For a given warp, find and write out the top-k highest floating
+/// point values in [start, end) to [out, out + k). The list written
+/// out is ordered.
+/// Handles all floats except NaNs.
+/// Implementation for large arrays such that there are more elements
+/// than warp threads.
 __device__ void
 warpFindTopKElementsValueOrderLarge(const DeviceTensor<float, 1>& data,
                                     DeviceTensor<float, 1>& out,
@@ -249,8 +249,8 @@ warpFindTopKElementsValueOrderLarge(const DeviceTensor<float, 1>& data,
   assert(sorted);
 }
 
-// Version of warpFindTopKElementsOrderedLage that also writes out the
-// indices in `data` of the K elements chosen into `indices`.
+/// Version of warpFindTopKElementsOrderedLage that also writes out the
+/// indices in `data` of the K elements chosen into `indices`.
 template <typename IndexType>
 __device__ void
 warpFindTopKElementsValueOrderLarge(const DeviceTensor<float, 1>& data,
@@ -274,10 +274,10 @@ warpFindTopKElementsValueOrderLarge(const DeviceTensor<float, 1>& data,
 
 } // detail
 
-// For a given warp, find and write out the top-k highest floating
-// point values in [start, end) to [out, out + k). The list written
-// out is ordered based on original index order. Handles all floats
-// except NaNs.
+/// For a given warp, find and write out the top-k highest floating
+/// point values in [start, end) to [out, out + k). The list written
+/// out is ordered based on original index order. Handles all floats
+/// except NaNs.
 __device__ void
 warpFindTopKElementsIndexOrder(const DeviceTensor<float, 1>& data,
                                DeviceTensor<float, 1>& out,
@@ -286,11 +286,11 @@ warpFindTopKElementsIndexOrder(const DeviceTensor<float, 1>& data,
   detail::warpFindTopKElementsIndexOrder(data, out, k);
 }
 
-// Version of warpFindTopKElementsOrdered which also writes out the
-// indices of the found top elements from `data`. The list written out
-// is ordered based on original index order. Handles all floats except
-// NaNs.
-// Supports writing out float or integer indices.
+/// Version of warpFindTopKElementsOrdered which also writes out the
+/// indices of the found top elements from `data`. The list written out
+/// is ordered based on original index order. Handles all floats except
+/// NaNs.
+/// Supports writing out float or integer indices.
 template <typename IndexType>
 __device__ void
 warpFindTopKElementsIndexOrder(const DeviceTensor<float, 1>& data,
@@ -303,10 +303,10 @@ warpFindTopKElementsIndexOrder(const DeviceTensor<float, 1>& data,
     data, out, indices, k);
 }
 
-// For a given warp, find and write out the top-k highest floating
-// point values in [start, end) to [out, out + k). The list written
-// out is ordered based on float value. Handles all floats except
-// NaNs.
+/// For a given warp, find and write out the top-k highest floating
+/// point values in [start, end) to [out, out + k). The list written
+/// out is ordered based on float value. Handles all floats except
+/// NaNs.
 __device__ void
 warpFindTopKElementsValueOrder(const DeviceTensor<float, 1>& data,
                                DeviceTensor<float, 1>& out,
@@ -322,10 +322,10 @@ warpFindTopKElementsValueOrder(const DeviceTensor<float, 1>& data,
   }
 }
 
-// Version of warpFindTopKElementsOrdered which also writes out the
-// indices of the found top elements from `data`. The list written out
-// is ordered based on float value. Handles all floats except NaNs.
-// Supports writing out float or integer indices.
+/// Version of warpFindTopKElementsOrdered which also writes out the
+/// indices of the found top elements from `data`. The list written out
+/// is ordered based on float value. Handles all floats except NaNs.
+/// Supports writing out float or integer indices.
 template <typename IndexType>
 __device__ void
 warpFindTopKElementsValueOrder(const DeviceTensor<float, 1>& data,

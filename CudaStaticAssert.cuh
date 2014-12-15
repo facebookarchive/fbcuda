@@ -1,9 +1,10 @@
 // Copyright 2004-present Facebook. All Rights Reserved.
 #pragma once
 
-// A nvcc-compilable version of static_assert. Remove once their
-// compiler achieves C++11.
-
+/**
+   A nvcc-compilable version of static_assert. Remove once their
+   compiler achieves C++11.
+*/
 template <bool>
 struct CudaStaticAssert;
 

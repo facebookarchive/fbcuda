@@ -21,10 +21,14 @@ template <typename TensorType, int SubDim>
 class DeviceSubTensor;
 }
 
-/// Templated multi-dimensional array that supports strided access of
-/// elements. Main access is through operator[]; e.g.,
-/// tensor[x][y][z].
-/// T is the contained type (e.g., float), Dim is the tensor rank
+/**
+   Templated multi-dimensional array that supports strided access of
+   elements. Main access is through `operator[]`; e.g.,
+   `tensor[x][y][z]`.
+
+- `T` is the contained type (e.g., `float`)
+- `Dim` is the tensor rank
+*/
 template <typename T, int Dim>
 class DeviceTensor {
  public:
@@ -92,18 +96,18 @@ class DeviceTensor {
   __host__ __device__ __forceinline__
   const detail::DeviceSubTensor<TensorType, Dim - 1> operator[](int) const;
 
-  /// Returns the size of a given dimension, [0, Dim - 1]. No bounds checking.
+  /// Returns the size of a given dimension, `[0, Dim - 1]`. No bounds checking.
   __host__ __device__ __forceinline__ int getSize(int i) const {
     return size_[i];
   }
 
-  /// Returns the size of a given dimension, [0, Dim - 1]. No bounds checking.
+  /// Returns the size of a given dimension, `[0, Dim - 1]`. No bounds checking.
   __host__ __device__ __forceinline__ int getStride(int i) const {
     return stride_[i];
   }
 
   /// Returns the total number of elements contained within our data
-  /// (product of getSize(i))
+  /// (product of `getSize(i)`)
   __host__ __device__ long numElements() const;
 
   /// Limited form of resize by permutation, make sure your permutation array
@@ -112,16 +116,18 @@ class DeviceTensor {
 
   /// Returns true if there is no padding within the tensor and no
   /// re-ordering of the dimensions.
+  /// ~~~
   /// (stride(i) == size(i + 1) * stride(i + 1))
+  /// ~~~
   __host__ __device__ bool isContiguous() const;
 
   /// Returns whether a given dimension has only increasing stride
   /// from the previous dimension. A tensor that was permuted by
   /// exchanging size and stride only will fail this check.
-  /// If i == 0 just check size > 0. Returns false if stride is <= 0.
+  /// If `i == 0` just check `size > 0`. Returns `false` if `stride` is `<= 0`.
   __host__ __device__ bool isConsistentlySized(int i) const;
 
-  // Returns whether at each dimension stride <= size.
+  // Returns whether at each dimension `stride <= size`.
   // If this is not the case then iterating once over the size space will
   // touch the same memory locations multiple times.
   __host__ __device__ bool isConsistentlySized() const;
@@ -129,30 +135,30 @@ class DeviceTensor {
   /// Returns true if the given dimension index has no padding
   __host__ __device__ bool isContiguousDim(int i) const;
 
-  /// Upcast a tensor of dimension D to some tensor of dimension
+  /// Upcast a tensor of dimension `D` to some tensor of dimension
   /// D' > D by padding the leading dimensions by 1
-  /// e.g., upcasting a 2-d tensor [2][3] to a 4-d tensor [1][1][2][3]
+  /// e.g., upcasting a 2-d tensor `[2][3]` to a 4-d tensor `[1][1][2][3]`
   template <int NewDim>
   __host__ __device__ DeviceTensor<T, NewDim> upcastOuter();
 
-  /// Upcast a tensor of dimension D to some tensor of dimension
+  /// Upcast a tensor of dimension `D` to some tensor of dimension
   /// D' > D by padding the lowest/most varying dimensions by 1
-  /// e.g., upcasting a 2-d tensor [2][3] to a 4-d tensor [2][3][1][1]
+  /// e.g., upcasting a 2-d tensor `[2][3]` to a 4-d tensor `[2][3][1][1]`
   template <int NewDim>
   __host__ __device__ DeviceTensor<T, NewDim> upcastInner();
 
-  /// Downcast a tensor of dimension D to some tensor of dimension
+  /// Downcast a tensor of dimension `D` to some tensor of dimension
   /// D' < D by collapsing the leading dimensions. asserts if there is
   /// padding on the leading dimensions.
   template <int NewDim>
   __host__ __device__ DeviceTensor<T, NewDim> downcast();
 
-  /// Returns a tensor that is a view of the SubDim-dimensional slice
+  /// Returns a tensor that is a view of the `SubDim`-dimensional slice
   /// of this tensor, starting at `at`.
   template <int SubDim>
   __host__ __device__ DeviceTensor<T, SubDim> view(T* at);
 
-  /// Returns a tensor that is a view of the SubDim-dimensional slice
+  /// Returns a tensor that is a view of the `SubDim`-dimensional slice
   /// of this tensor, starting where our data begins
   template <int SubDim>
   __host__ __device__ DeviceTensor<T, SubDim> view();
@@ -258,11 +264,11 @@ class DeviceSubTensor<TensorType, 0> {
   typename TensorType::DataType* const data_;
 };
 
-/// A SubDim-rank slice of a parent DeviceTensor
+/// A `SubDim`-rank slice of a parent DeviceTensor
 template <typename TensorType, int SubDim>
 class DeviceSubTensor {
  public:
-  /// Returns a view of the data located at our offset (the dimension SubDim - 1
+  /// Returns a view of the data located at our offset (the dimension `SubDim` - 1
   /// tensor).
   __host__ __device__ __forceinline__
   DeviceSubTensor<TensorType, SubDim - 1> operator[](int index) {
@@ -271,7 +277,7 @@ class DeviceSubTensor {
       data_ + index * tensor_.getStride(TensorType::NumDim - SubDim));
   }
 
-  /// Returns a view of the data located at our offset (the dimension SubDim - 1
+  /// Returns a view of the data located at our offset (the dimension `SubDim` - 1
   /// tensor) (const).
   __host__ __device__ __forceinline__
   const DeviceSubTensor<TensorType, SubDim - 1> operator[](int index) const {

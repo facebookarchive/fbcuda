@@ -8,7 +8,10 @@
 
 namespace facebook { namespace cuda {
 
-// Templated warp shuffles that work for basic and pair types
+/** @file
+
+    Templated warp shuffles that work for basic and pair types
+*/
 
 template <typename T>
 __device__ __forceinline__ T

@@ -17,13 +17,14 @@ __device__ __forceinline__ T shflSwap(const T x, int mask, int dir) {
 
 } // namespace
 
-// Defines a bitonic sort network to exchange 'V' according to
-// `SWAP()`'s compare and exchange mechanism across the warp, ordered
-// according to the comparator `comp`. In other words, if `comp` is
-// `GreaterThan<T>`, then lane 0 will contain the highest `val`
-// presented across the warp
-// c.f.: http://on-demand.gputechconf.com/gtc/2013/presentations/
-//   S3174-Kepler-Shuffle-Tips-Tricks.pdf
+/// Defines a bitonic sort network to exchange 'V' according to
+/// `SWAP()`'s compare and exchange mechanism across the warp, ordered
+/// according to the comparator `comp`. In other words, if `comp` is
+/// `GreaterThan<T>`, then lane 0 will contain the highest `val`
+/// presented across the warp
+///
+/// See also 
+/// http://on-demand.gputechconf.com/gtc/2013/presentations/S3174-Kepler-Shuffle-Tips-Tricks.pdf
 template <typename T, typename Comparator>
 __device__ T warpBitonicSort(T val) {
   const int laneId = getLaneId();

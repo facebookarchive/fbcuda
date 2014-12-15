@@ -11,6 +11,9 @@
 
 namespace facebook { namespace cuda {
 
+/**
+   `cuComplex` wrapper.
+*/
 struct Complex {
   __host__ __device__ __forceinline__
   Complex() {}
