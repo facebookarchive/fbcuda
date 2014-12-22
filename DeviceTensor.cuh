@@ -42,7 +42,6 @@ class DeviceTensor {
   /// Constructor that calculates strides with no padding
   __host__ __device__ DeviceTensor(T* data, const int sizes[Dim]);
 
-
   /// Constructor that takes arbitrary size/stride arrays
   __host__ __device__ DeviceTensor(T* data,
                                    const int sizes[Dim],
@@ -109,6 +108,16 @@ class DeviceTensor {
   /// Returns the total number of elements contained within our data
   /// (product of `getSize(i)`)
   __host__ __device__ long numElements() const;
+
+  /// Returns the size array.
+  __host__ __device__ __forceinline__ const int* sizes() const {
+    return size_;
+  }
+
+  /// Returns the stride array.
+  __host__ __device__ __forceinline__ const int* strides() const {
+    return stride_;
+  }
 
   /// Limited form of resize by permutation, make sure your permutation array
   /// is legit. Only works for contiguous tensors.
