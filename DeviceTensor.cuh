@@ -198,12 +198,35 @@ class DeviceSubTensor<TensorType, 0> {
     return *this;
   }
 
+  // operator T&
   __host__ __device__ operator typename TensorType::DataType&() {
     return *data_;
   }
 
+  // const operator T& returning const T&
   __host__ __device__ operator const typename TensorType::DataType&() const {
     return *data_;
+  }
+
+  // operator& returning T*
+  __host__ __device__ typename TensorType::DataType* operator&() {
+    return data_;
+  }
+
+  // const operator& returning const T*
+  __host__ __device__ const typename TensorType::DataType* operator&() const {
+    return data_;
+  }
+
+  /// Returns a raw accessor to our slice.
+  __host__ __device__ __forceinline__ typename TensorType::DataType* data() {
+    return data_;
+  }
+
+  /// Returns a raw accessor to our slice (const).
+  __host__ __device__ __forceinline__
+  const typename TensorType::DataType* data() const {
+    return data_;
   }
 
   /// Cast to a different datatype.
@@ -216,17 +239,6 @@ class DeviceSubTensor<TensorType, 0> {
   template <typename T>
   __host__ __device__ const T& as() const {
     return *dataAs<T>();
-  }
-
-  /// Returns a raw accessor to our slice.
-  __host__ __device__ __forceinline__ typename TensorType::DataType* data() {
-    return data_;
-  }
-
-  /// Returns a raw accessor to our slice (const).
-  __host__ __device__ __forceinline__
-  const typename TensorType::DataType* data() const {
-    return data_;
   }
 
   /// Cast to a different datatype
@@ -293,6 +305,16 @@ class DeviceSubTensor {
     return DeviceSubTensor<TensorType, SubDim - 1>(
       tensor_,
       data_ + index * tensor_.getStride(TensorType::NumDim - SubDim));
+  }
+
+  // operator& returning T*
+  __host__ __device__ typename TensorType::DataType* operator&() {
+    return data_;
+  }
+
+  // const operator& returning const T*
+  __host__ __device__ const typename TensorType::DataType* operator&() const {
+    return data_;
   }
 
   /// Returns a raw accessor to our slice.
