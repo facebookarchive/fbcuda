@@ -160,7 +160,13 @@ class DeviceTensor {
   /// D' < D by collapsing the leading dimensions. asserts if there is
   /// padding on the leading dimensions.
   template <int NewDim>
-  __host__ __device__ DeviceTensor<T, NewDim> downcast();
+  __host__ __device__ DeviceTensor<T, NewDim> downcastOuter();
+
+  /// Downcast a tensor of dimension `D` to some tensor of dimension
+  /// D' < D by collapsing the leading dimensions. asserts if there is
+  /// padding on the leading dimensions.
+  template <int NewDim>
+  __host__ __device__ DeviceTensor<T, NewDim> downcastInner();
 
   /// Returns a tensor that is a view of the `SubDim`-dimensional slice
   /// of this tensor, starting at `at`.

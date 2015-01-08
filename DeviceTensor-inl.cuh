@@ -298,7 +298,7 @@ DeviceTensor<T, Dim>::upcastInner() {
 template <typename T, int Dim>
 template <int NewDim>
 __host__ __device__ DeviceTensor<T, NewDim>
-DeviceTensor<T, Dim>::downcast() {
+DeviceTensor<T, Dim>::downcastOuter() {
   // Can only create tensors of lesser dimension
   cuda_static_assert(NewDim < Dim);
 
@@ -340,6 +340,56 @@ DeviceTensor<T, Dim>::downcast() {
       }
 
       newStride[i - ignoredDims] = getStride(i);
+    }
+  }
+
+  return DeviceTensor<T, NewDim>(data_, newSize, newStride);
+}
+
+template <typename T, int Dim>
+template <int NewDim>
+__host__ __device__ DeviceTensor<T, NewDim>
+DeviceTensor<T, Dim>::downcastInner() {
+  // Can only create tensors of lesser dimension
+  cuda_static_assert(NewDim < Dim);
+
+  // We can't downcast non-contiguous tensors, since it leaves
+  // garbage data in the tensor. The tensor needs to be contiguous
+  // in all of the dimensions we are collapsing (no padding in
+  // them).
+  for (int i = NewDim; i < Dim; ++i) {
+    bool cont = isContiguousDim(i);
+#ifdef __CUDA_ARCH__
+    // Device code
+    assert(isContiguousDim(i));
+#else
+    // Host code
+    if (!cont) {
+      throw std::invalid_argument("Can only downcast contiguous tensors");
+    }
+#endif
+  }
+
+  int newSize[NewDim];
+  int newStride[NewDim];
+
+  int collapsedSize = 1;
+
+  for (int i = Dim - 1; i >= 0; --i) {
+    if (i >= NewDim) {
+      // Collapse these dimensions
+      collapsedSize *= getSize(i);
+    } else {
+      // Non-collapsed dimensions
+      if (i == NewDim - 1) {
+        // This is the first non-collapsed dimension
+        newSize[i] = collapsedSize * getSize(i);
+        newStride[i] = getStride(Dim - 1);
+      } else {
+        // Subsequent non-collapsed dimensions
+        newSize[i] = getSize(i);
+        newStride[i] = getStride(i);
+      }
     }
   }
 

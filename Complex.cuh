@@ -106,7 +106,7 @@ struct Complex {
   }
 
   __host__ __device__ __forceinline__
-  void sincos(float angle) {
+  void cexp(float angle) {
     sincosf(angle, &cplx_.y, &cplx_.x);
   }
 
