@@ -743,3 +743,7 @@ __device__ __forceinline__ void transpose2DMultiple(
 } // namespace
 
 }}} // namespace
+
+#include "cuda/fbfft/FBFFT-inl.cuh"
+#include "cuda/fbfft/FBFFT2D-inl.cuh"
+#include "cuda/fbfft/FBIFFT2D-inl.cuh"

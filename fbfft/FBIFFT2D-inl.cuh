@@ -5,7 +5,6 @@
 #include "cuda/CudaUtils.cuh"
 #include "cuda/DeviceTensor.cuh"
 #include "cuda/fbfft/FBFFTCommon.cuh"
-#include "torch/fb/fbcunn/layers/cuda/fft/CuFFTWrapper.cuh"
 
 #include <cuda_runtime.h>
 #include <glog/logging.h>

@@ -1,4 +1,5 @@
 // Copyright 2004-present Facebook. All Rights Reserved.
+
 #pragma once
 
 #include "cuda/Complex.cuh"
@@ -8,10 +9,11 @@ namespace facebook { namespace cuda { namespace fbfft {
 
 class FBFFTParameters {
  public:
-  typedef int ErrorCode;
-  static const ErrorCode Success = 0;
-  static const ErrorCode UnsupportedSize = 1;
-  static const ErrorCode UnsupportedDimension = 2;
+  enum ErrorCode {
+    Success = 0,
+    UnsupportedSize = 1,
+    UnsupportedDimension = 2
+  };
 
   FBFFTParameters& forward() {
     direction_ = true;
