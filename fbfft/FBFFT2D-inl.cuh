@@ -28,17 +28,35 @@ __device__ __forceinline__ void load2D(
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int y = adjustedThreadIdxY<FFTSize>() + indexY * blockDim.y;
 
-  // Support zero padding without a need to copy the input data to a larger
-  // array.
-  // TODO: center the kernel wrt to zeros.
-  // TODO: support reflection padding: pass the kernel size to fill with
-  // reflection and then zero after that to pad till the FFT size.
-  // TODO: support complex input (just read the imaginary part)
-  // TODO: try to do something with float4 and shuffles
+  // Zero padding without a need to copy the input data to a larger array.
   coeffs[indexX] =
     Complex((y < real.getSize(1) && x < real.getSize(2)) ?
             real[batch][y][x].ldg() : 0.0f,
             0.0f);
+}
+
+template <int FFTSize, bool EvenDivideBatches>
+__device__ __forceinline__ void load2DR2C(
+    const DeviceTensor<float, 3>& real,
+    FFT1DCoeffs<FFTSize>& coeffs,
+    const int batch,
+    const int indexX,
+    const int indexY) {
+  int LogFFTSize = getMSB<FFTSize>();
+  // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
+  int x = adjustedThreadIdxX<FFTSize>() + indexX * blockDim.x;
+  // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
+  int y = adjustedThreadIdxY<FFTSize>() + indexY * blockDim.y;
+
+  // Zero padding without a need to copy the input data to a larger array.
+  coeffs[indexX] = (y < real.getSize(1) && x < real.getSize(2)) ?
+    Complex(real[batch][y][x].ldg(),
+            (EvenDivideBatches || batch + 1 < real.getSize(0)) ?
+            real[batch + 1][y][x].ldg()
+            :
+            0.0f)
+    :
+    Complex(0.0f);
 }
 
 template <int FFTSize>
@@ -53,7 +71,6 @@ __device__ __forceinline__ void store2D(
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int y = adjustedThreadIdxY<FFTSize>() + indexY * blockDim.y;
   if (y < complexAsFloat.getSize(1) && x < complexAsFloat.getSize(2)) {
-    // TODO: try to do something with float4 and shuffles
     complexAsFloat[batch][y][x][0].as<Complex>() = coeffs[indexX];
   }
 }
@@ -70,155 +87,126 @@ __device__ __forceinline__ void store2D(
 template <int FFTSize, int SMemRows, int RowsPerWarp, int FFTPerWarp>
 __device__ __forceinline__ void transpose2DHermitianMultiple(
       FFT1DCoeffs<FFTSize> (&coeffsArray)[RowsPerWarp],
-      Complex(*buffer)[SMemRows / 2 + 1][SMemRows]) {
+      Complex(*buffer)[SMemRows + 1]) {
   const int LogFFTSize = getMSB<FFTSize>();
   const int thx0 = (threadIdx.x >> LogFFTSize) << LogFFTSize;
 #pragma unroll
-  for (int row = 0; row < RowsPerWarp / 2; ++row) {
-    FFT1DCoeffs<FFTSize>& coeffsLo = coeffsArray[row];
-    FFT1DCoeffs<FFTSize>& coeffsHi = coeffsArray[row + RowsPerWarp / 2];
-#pragma unroll
-    for (int reg = 0; reg < coeffsLo.ColumnsPerWarp; ++reg) {
-      if ((threadIdx.x & (FFTSize - 1)) < FFTSize / 2 + 1) {
-        buffer[threadIdx.z][threadIdx.y][threadIdx.x] = coeffsLo.coeff[reg];
-        buffer[threadIdx.z][threadIdx.y + blockDim.y][threadIdx.x] =
-          coeffsHi.coeff[reg];
-      }
-      __syncthreads();
-      coeffsLo.coeff[reg] =
-        buffer
-        [threadIdx.z]
-        [threadIdx.x & (FFTSize - 1)]
-        [thx0 + threadIdx.y];
-      if (threadIdx.y == 0) {
-        coeffsHi.coeff[reg] =
-          buffer
-          [threadIdx.z]
-          [threadIdx.x & (FFTSize - 1)]
-          [thx0 + threadIdx.y + blockDim.y];
-      }
-      __syncthreads();
-    }
+  for (int row = 0; row < RowsPerWarp; ++row) {
+    int y = adjustedThreadIdxY<FFTSize>() + row * blockDim.y;
+    FFT1DCoeffs<FFTSize>& coeffs = coeffsArray[row];
+    buffer[y][threadIdx.x] = coeffs.coeff[0];
   }
+
+  __syncthreads();
+
+#pragma unroll
+  for (int row = 0; row < RowsPerWarp; ++row) {
+    int y = adjustedThreadIdxY<FFTSize>() + row * blockDim.y;
+    FFT1DCoeffs<FFTSize>& coeffs = coeffsArray[row];
+    coeffs.coeff[0] =
+      buffer
+      [adjustedThreadIdxX<FFTSize>()]
+      [thx0 + y];
+  }
+
+  __syncthreads();
 }
 
-// Performs cross warp transpose of the data in registers, synchronously for
-// each register at a time and takes advantage of Hermitian symmetry.
-//
-// Supports only a single FFT per warp.
-//
-// Invariants are:
-//  - not synchronized on entry of the loop
-//  - synchronized at each step of the loop
-//  - synchronized on exit
-template <int FFTSize, int SMemRows, int RowsPerWarp>
-__device__ __forceinline__ void transpose2DHermitianSingle(
-      FFT1DCoeffs<FFTSize> (&coeffsArray)[RowsPerWarp],
-      Complex(*buffer)[SMemRows][SMemRows / 2 + 1]) {
-#pragma unroll
-  for (int row = 0; row < RowsPerWarp / 2; ++row) {
-    FFT1DCoeffs<FFTSize>& coeffsLo = coeffsArray[row];
-    FFT1DCoeffs<FFTSize>& coeffsHi = coeffsArray[row + RowsPerWarp / 2];
-#pragma unroll
-    for (int reg = 0; reg < coeffsLo.ColumnsPerWarp; ++reg) {
-      if (threadIdx.x < blockDim.x / 2 + 1) {
-        buffer[threadIdx.z][threadIdx.y][threadIdx.x] = coeffsLo.coeff[reg];
-        buffer[threadIdx.z][threadIdx.y + blockDim.y][threadIdx.x] =
-          coeffsHi.coeff[reg];
-      }
-      __syncthreads();
-      coeffsLo.coeff[reg] = buffer[threadIdx.z][threadIdx.x][threadIdx.y];
-      if (threadIdx.y == 0) {
-        coeffsHi.coeff[reg] =
-          buffer[threadIdx.z][threadIdx.x][threadIdx.y + blockDim.y];
-      }
-      __syncthreads();
-    }
-  }
-}
-
-// In the 2-D real to complex case, we can exploit Hermitian symmetry.
-// We exploit the symmetry to cut in half the amount of work  for sizes >= 32.
-// Given a square FFT of size NxN (power of 2), with Hermitian symmetry we
-// only need to compute N x (N / 2 + 1) after transposition.
-// The N / 2 + 1 factor is problematic because it typically results in sizes
-// such as 32 x 17. This is a bad scenario for GPU occupancy.
-// Instead, we implement this as 32 x 16 with a Lo and Hi register.
-// Every threadIdx.y performs work on the Lo register but only threadIdx.y ==
-// 0 performs work on the Hi register.
-// This results in a much better occupancy and a 30% performance improvement.
-template <int FFTSize, int FFTPerWarp, bool BitReverse>
+template <int FFTSize, int FFTPerWarp, int RowsPerWarp, bool BitReverse>
 __global__ void decimateInFrequencyHermitian2DWarpKernel(
     DeviceTensor<float, 3> real, DeviceTensor<float, 4> complexAsFloat) {
   cuda_static_assert(!(FFTPerWarp & (FFTPerWarp - 1)));
   cuda_static_assert(FFTPerWarp * FFTSize <= WARP_SIZE);
   // Only let FFTs <= 8 have multiple per warp, 16 and 32 perform better with
   // 1 per warp.
-  cuda_static_assert(FFTSize <= 8 || FFTPerWarp == 1);
+  cuda_static_assert(FFTSize <= WARP_SIZE);
   assert(FFTPerWarp * FFTSize == blockDim.x);
   assert(real.getSize(0) % FFTPerWarp == 0);
 
   int LogFFTSize = getMSB<FFTSize>();
   // Enforce that the number of FFTs we perform is divisible by the number of
   // FFTs per warp, otherwise weird divergence will occur and possibly bugs.
-  const int batch = adjustedBatch<FFTSize, FFTPerWarp>();
+  const int batch = adjustedBatchR2C<FFTSize, FFTPerWarp, true>();
   if (batch >= real.getSize(0)) {
     return;
   }
 
-  FFT1DCoeffs<FFTSize> coeffs;
-  __shared__ Complex buffer[WARP_SIZE / 2 + 1][WARP_SIZE + 1];
-
-  cuda_static_assert(FFTSize <= WARP_SIZE);
+  // Can support multiple rows of FFT per warp if needed, atm use 1
+  FFT1DCoeffs<FFTSize> coeffsArray[RowsPerWarp];
+  FFT1DCoeffs<FFTSize> coeffsArray2[2][RowsPerWarp];
+#pragma unroll
+  for (int i = 0; i < RowsPerWarp; ++i) {
+    load2DR2C<FFTSize, false>(real, coeffsArray[i], batch, 0, i);
+  }
 
   // Twiddles is the same as for 1D but fully data parallel across threadIdx.y
   FFT1DRoots<FFTSize> roots;
   roots.template twiddles<true>();
 
-  FFT1DCoeffs<FFTSize> coeffsArray[2];
-  load2D<FFTSize>(real, coeffsArray[0], batch, 0, 0);
-  load2D<FFTSize>(real, coeffsArray[1], batch, 0, 1);
-  decimateInFrequency1DWarp<FFTSize, FFTSize>(coeffsArray[0][0], roots[0]);
-  decimateInFrequency1DWarp<FFTSize, FFTSize>(coeffsArray[1][0], roots[0]);
+#pragma unroll
+  for (int i = 0; i < RowsPerWarp; ++i) {
+    decimateInFrequency1DWarp<FFTSize>(coeffsArray[i][0], roots[0]);
+  }
   FFT1DBitReversal<FFTSize> bits;
   if (BitReverse) {
     bits.computeBitReversal(0);
-    bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffsArray[0], bits, batch, 0);
-    bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffsArray[1], bits, batch, 0);
-  }
-
-  // Here we have 2 code paths because the complexity to cram multiple FFTs in
-  // a single warp is expensive for 16 and 32 which perform better with
-  // simpler control flow.
-  if (FFTPerWarp > 1) {
-    transpose2DHermitianMultiple<FFTSize, WARP_SIZE, 2, FFTPerWarp>(
-      coeffsArray,
-      (Complex(*)[WARP_SIZE / 2 + 1][WARP_SIZE])buffer);
-  } else {
-    transpose2DHermitianSingle<FFTSize, WARP_SIZE, 2>(
-      coeffsArray,
-      (Complex(*)[WARP_SIZE][WARP_SIZE / 2 + 1])buffer);
-  }
-
-  decimateInFrequency1DWarp<FFTSize, FFTSize>(coeffsArray[0][0], roots[0]);
-  if (BitReverse) {
-    // Bit reversal is the same as for 1D but fully data parallel across
-    // threadIdx.y
-    bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffsArray[0], bits, batch, 0);
-  }
-  if (threadIdx.y == 0) {
-    decimateInFrequency1DWarp<FFTSize, FFTSize>(coeffsArray[1][0], roots[0]);
-    if (BitReverse) {
-      // Bit reversal is the same as for 1D but fully data parallel across
-      // threadIdx.y
-      bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffsArray[1], bits, batch, 0);
+#pragma unroll
+    for (int i = 0; i < RowsPerWarp; ++i) {
+      bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffsArray[i], bits, 0);
     }
   }
 
-  // If needed, could reintroduce the "untranspose" feature but this is
-  // expensive for sizes > 32
-  store2D<FFTSize>(complexAsFloat, coeffsArray[0], batch, 0, 0);
-  store2D<FFTSize>(complexAsFloat, coeffsArray[1], batch, 0, 1);
+#pragma unroll
+  for (int i = 0; i < RowsPerWarp; ++i) {
+    Complex other =
+      shfl(coeffsArray[i][0],
+           FFTSize - adjustedThreadIdxX<FFTSize>(),
+           FFTSize);
+    coeffsArray2[0][i].coeff[0] =
+      Complex(0.5f * (coeffsArray[i][0].re() + other.re()),
+              0.5f * (coeffsArray[i][0].im() - other.im()));
+    coeffsArray2[1][i].coeff[0] =
+      Complex(0.5f * ( coeffsArray[i][0].im() + other.im()),
+              0.5f * (-coeffsArray[i][0].re() + other.re()));
+  }
+
+  __shared__ Complex buffer[FFTSize][WARP_SIZE + 1];
+  transpose2DHermitianMultiple<FFTSize, WARP_SIZE, RowsPerWarp, FFTPerWarp>(
+    coeffsArray2[0],
+    (Complex(*)[WARP_SIZE + 1])buffer);
+  transpose2DHermitianMultiple<FFTSize, WARP_SIZE, RowsPerWarp, FFTPerWarp>(
+    coeffsArray2[1],
+    (Complex(*)[WARP_SIZE + 1])buffer);
+
+#pragma unroll
+  for (int i = 0; i < RowsPerWarp; ++i) {
+    int y = adjustedThreadIdxY<FFTSize>() + i * blockDim.y;
+    if (y < FFTSize / 2 + 1) {
+      decimateInFrequency1DWarp<FFTSize>(coeffsArray2[0][i][0], roots[0]);
+      decimateInFrequency1DWarp<FFTSize>(coeffsArray2[1][i][0], roots[0]);
+    }
+  }
+
+  if (BitReverse) {
+#pragma unroll
+    for (int i = 0; i < RowsPerWarp; ++i) {
+      int y = adjustedThreadIdxY<FFTSize>() + i * blockDim.y;
+      if (y < FFTSize / 2 + 1) {
+        // Bit reversal is the same as for 1D but fully data parallel across
+        // threadIdx.y
+        bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffsArray2[0][i], bits, 0);
+        bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffsArray2[1][i], bits, 0);
+      }
+    }
+  }
+
+#pragma unroll
+  for (int i = 0; i < RowsPerWarp; ++i) {
+    store2D<FFTSize>(complexAsFloat, coeffsArray2[0][i], batch, 0, i);
+    if (batch + 1 < real.getSize(0)) {
+      store2D<FFTSize>(complexAsFloat, coeffsArray2[1][i], batch + 1, 0, i);
+    }
+  }
 }
 
 
@@ -470,30 +458,25 @@ FBFFTParameters::ErrorCode fbfft2D(
     return FBFFTParameters::UnsupportedSize;
   }
 
-  // At warp level, no buffer is needed, output must be (N / 2 + 1) x N
-  // TODO: this drops to 1 FFT per warp if batch size is not an even multiple
-  // of FFTS_PER_WARP -> implement kernel and epilogue to handle most cases
-  // efficiently
 #define SELECT_FBFFT_2D_DIF_WARP_SINGLE(                                \
-  FFT_SIZE, FFTS_PER_WARP, BIT_REVERSE)                                 \
+  FFT_SIZE, FFTS_PER_WARP, BIT_REVERSE, ROWS_PER_WARP)                  \
   cuda_static_assert(FFT_SIZE <= WARP_SIZE);                            \
   if (complexAsFloat.getSize(2) == FFT_SIZE) {                          \
-    if (real.getSize(0) % FFTS_PER_WARP == 0) {                         \
-      dim3 blocks(ceil(real.getSize(0), FFTS_PER_WARP));                \
+    if (real.getSize(0) % (2 * FFTS_PER_WARP) == 0) {                   \
+      dim3 blocks(ceil(real.getSize(0), 2 * FFTS_PER_WARP));            \
       dim3 threads(FFT_SIZE * FFTS_PER_WARP,                            \
-                   FFT_SIZE / 2);                                       \
+                   ceil(FFT_SIZE, ROWS_PER_WARP));                      \
       detail::decimateInFrequencyHermitian2DWarpKernel<                 \
-        FFT_SIZE, FFTS_PER_WARP, BIT_REVERSE>                           \
+        FFT_SIZE, FFTS_PER_WARP, ROWS_PER_WARP, BIT_REVERSE>            \
         <<<blocks, threads, 0, s>>>(real, complexAsFloat);              \
     } else {                                                            \
-      dim3 blocks(complexAsFloat.getSize(0));                           \
-      dim3 threads(FFT_SIZE,                                            \
-                   FFT_SIZE / 2);                                       \
+      dim3 blocks(ceil(complexAsFloat.getSize(0), 2));                  \
+      dim3 threads(FFT_SIZE, FFT_SIZE);                                 \
       detail::decimateInFrequencyHermitian2DWarpKernel<                 \
-        FFT_SIZE, 1, BIT_REVERSE>                                       \
+        FFT_SIZE, 1, 1, BIT_REVERSE>                                    \
         <<<blocks, threads, 0, s>>>(real, complexAsFloat);              \
     }                                                                   \
-    return FBFFTParameters::Success;                                      \
+    return FBFFTParameters::Success;                                    \
   }
 
   // Above warp level, buffer is needed, output must be N x (N / 2 + 1)
@@ -505,16 +488,15 @@ FBFFTParameters::ErrorCode fbfft2D(
   detail::decimateInFrequency2DKernel<                                  \
     FFT_SIZE,  ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE>                 \
     <<<blocks, threads, 0, s>>>(real, complexAsFloat);                  \
-  return FBFFTParameters::Success;                                        \
+  return FBFFTParameters::Success;                                      \
 }
 
-  SELECT_FBFFT_2D_DIF_WARP_SINGLE(2, 16, true);
-  SELECT_FBFFT_2D_DIF_WARP_SINGLE(4, 8, true);
-  SELECT_FBFFT_2D_DIF_WARP_SINGLE(8, 4, true);
-  // 16, 2 performs better than 16, 1
-  SELECT_FBFFT_2D_DIF_WARP_SINGLE(16, 1, true);
-  SELECT_FBFFT_2D_DIF_WARP_SINGLE(32, 1, true);
-  SELECT_FBFFT_2D_DIF_SINGLE(64, 4, 4, true);
+  SELECT_FBFFT_2D_DIF_WARP_SINGLE( 2, 16, true, 1);
+  SELECT_FBFFT_2D_DIF_WARP_SINGLE( 4,  8, true, 1);
+  SELECT_FBFFT_2D_DIF_WARP_SINGLE( 8,  4, true, 2);
+  SELECT_FBFFT_2D_DIF_WARP_SINGLE(16,  2, true, 4);
+  SELECT_FBFFT_2D_DIF_WARP_SINGLE(32,  1, true, 4);
+  SELECT_FBFFT_2D_DIF_SINGLE( 64, 4, 4, true);
   SELECT_FBFFT_2D_DIF_SINGLE(128, 4, 4, true);
 
 #undef SELECT_FBFFT_2D_DIF_WARP_SINGLE
@@ -556,7 +538,7 @@ FBFFTParameters::ErrorCode fbfft2D(
     detail::decimateInFrequency2DKernel##FFT_SIZE<                      \
       FFT_SIZE,  ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE, true>         \
       <<<blocks, threads, 0, s>>>(complexSrc, complexDst);              \
-      return FBFFTParameters::Success;                                    \
+      return FBFFTParameters::Success;                                  \
   }
 
   SELECT_FBFFT_2D_DIF_SINGLE(64, 2, 17, true);

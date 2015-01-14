@@ -202,11 +202,11 @@ __global__ void decimateInFrequencyInverseHermitian2DWarpKernel(
   load2D2a<Complex, FFTSize, 3>(src, coeffs, batch, 0, 0, 0);
   load2D2b<Complex, FFTSize, 3>(src, coeffs, batch + FFTPerWarp * gridDim.x, 0, 0, 0);
 
-  decimateInFrequency1DWarp<FFTSize, FFTSize>(coeffs[0], roots[0]);
+  decimateInFrequency1DWarp<FFTSize>(coeffs[0], roots[0]);
   FFT1DBitReversal<FFTSize> bits;
   if (BitReverse) {
     bits.computeBitReversal(0);
-    bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffs, bits, batch, 0);
+    bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffs, bits, 0);
   }
 
   if (FFTPerWarp > 1) {
@@ -219,11 +219,11 @@ __global__ void decimateInFrequencyInverseHermitian2DWarpKernel(
       (Complex(*)[WARP_SIZE][WARP_SIZE + 1])buffer);
   }
 
-  decimateInFrequency1DWarp<FFTSize, FFTSize>(coeffs[0], roots[0]);
+  decimateInFrequency1DWarp<FFTSize>(coeffs[0], roots[0]);
   if (BitReverse) {
     // Bit reversal is the same as for 1D but fully data parallel across
     // threadIdx.y
-    bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffs, bits, batch, 0);
+    bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffs, bits, 0);
   }
 
   // If needed, could reintroduce the "untranspose" feature but this is
