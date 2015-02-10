@@ -163,6 +163,9 @@ unsigned long setBitfield(unsigned long val, unsigned toInsert,
   return ret;
 }
 
+/**
+   Returns the index of the most significant 1 bit in `val`.
+*/
 __device__ __forceinline__ int getMSB(int val) {
   unsigned ret;
   asm("bfind.u32 %0, %1;" : "=r"(ret) : "r"(val));
