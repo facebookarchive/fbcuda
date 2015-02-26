@@ -3,9 +3,12 @@
 
 #include <cuda.h>
 
-// warpSize is not a compile-time constant, so it cannot be used for
-// loop unrolling and other compile-time things. Define it and other
-// parameters based on compute capability.
+/** @file
+    Compute capability specific defines that can be used as
+    compile-time constants.
+    warpSize for instance is not a compile-time constant, so it cannot
+    be used for loop unrolling and register assignment.
+*/
 
 #ifdef __CUDA_ARCH__
 #if __CUDA_ARCH__ < 200

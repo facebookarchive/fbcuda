@@ -244,6 +244,43 @@ DeviceTensor<T, Dim>::isContiguousDim(int i) const {
 }
 
 template <typename T, int Dim>
+__host__ __device__ DeviceTensor<T, Dim>
+DeviceTensor<T, Dim>::transpose(int dim1, int dim2) const {
+#ifdef __CUDA_ARCH__
+  // Device code
+  assert(dim1 >= 0 && dim1 < Dim);
+  assert(dim1 >= 0 && dim2 < Dim);
+#else
+  // Host code
+  if (dim1 < 0 || dim1 >= Dim) {
+    throw std::invalid_argument("dim1 out of bounds");
+  }
+
+  if (dim2 < 0 || dim2 >= Dim) {
+    throw std::invalid_argument("dim2 out of bounds");
+  }
+#endif
+
+  int newSize[Dim];
+  int newStride[Dim];
+
+  for (int i = 0; i < Dim; ++i) {
+    newSize[i] = size_[i];
+    newStride[i] = stride_[i];
+  }
+
+  int tmp = newSize[dim1];
+  newSize[dim1] = newSize[dim2];
+  newSize[dim2] = tmp;
+
+  tmp = newStride[dim1];
+  newStride[dim1] = newStride[dim2];
+  newStride[dim2] = tmp;
+
+  return DeviceTensor<T, Dim>(data_, newSize, newStride);
+}
+
+template <typename T, int Dim>
 template <int NewDim>
 __host__ __device__ DeviceTensor<T, NewDim>
 DeviceTensor<T, Dim>::upcastOuter() {

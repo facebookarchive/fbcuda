@@ -144,6 +144,11 @@ class DeviceTensor {
   /// Returns true if the given dimension index has no padding
   __host__ __device__ bool isContiguousDim(int i) const;
 
+  /// Returns a tensor of the same dimension after transposing the two
+  /// dimensions given. Does not actually move elements; transposition
+  /// is made by permuting the size/stride arrays.
+  __host__ __device__ DeviceTensor<T, Dim> transpose(int dim1, int dim2) const;
+
   /// Upcast a tensor of dimension `D` to some tensor of dimension
   /// D' > D by padding the leading dimensions by 1
   /// e.g., upcasting a 2-d tensor `[2][3]` to a 4-d tensor `[1][1][2][3]`

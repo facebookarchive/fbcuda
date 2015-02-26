@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include "cuda/ComputeCapabilities.cuh"
 #include "cuda/CudaStaticAssert.cuh"
 
 namespace facebook { namespace cuda {
@@ -21,6 +22,21 @@ __device__ __forceinline__ int getWarpId() {
   return (threadIdx.z * blockDim.y * blockDim.x +
           threadIdx.y * blockDim.x +
           threadIdx.x) / warpSize;
+}
+
+/**
+   Returns the number of threads in the current block (linearized).
+*/
+__device__ __forceinline__ int getThreadsInBlock() {
+  return (blockDim.x * blockDim.y * blockDim.z);
+}
+
+/**
+   Returns the number of warps in the current block (linearized,
+   rounded to whole warps).
+*/
+__device__ __forceinline__ int getWarpsInBlock() {
+  return ceil(getThreadsInBlock(), WARP_SIZE);
 }
 
 /**
