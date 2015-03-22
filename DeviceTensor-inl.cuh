@@ -13,8 +13,8 @@ namespace facebook { namespace cuda {
 
 namespace detail {
 
-template <int N>
-__host__ __device__ void copy(int to[N], int from[N]) {
+template <typename T, int N>
+__host__ __device__ void copy(T to[N], T from[N]) {
   for (int i = 0; i < N; ++i) {
     to[i] = from[i];
   }
@@ -22,21 +22,24 @@ __host__ __device__ void copy(int to[N], int from[N]) {
 
 } // namespace detail
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 __host__ __device__
-DeviceTensor<T, Dim>::DeviceTensor()
+DeviceTensor<T, Dim, IndexT, PtrTraits>::DeviceTensor()
     : data_(NULL) {
   cuda_static_assert(Dim > 0);
 
   for (int i = 0; i < Dim; ++i) {
     size_[i] = 0;
-    stride_[i] = 1;
+    stride_[i] = (IndexT) 1;
   }
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 __host__ __device__
-DeviceTensor<T, Dim>::DeviceTensor(T* data, const int sizes[Dim])
+DeviceTensor<T, Dim, IndexT, PtrTraits>::
+DeviceTensor(DataPtrType data, const IndexT sizes[Dim])
     : data_(data) {
   cuda_static_assert(Dim > 0);
 
@@ -44,17 +47,18 @@ DeviceTensor<T, Dim>::DeviceTensor(T* data, const int sizes[Dim])
     size_[i] = sizes[i];
   }
 
-  stride_[Dim - 1] = 1;
+  stride_[Dim - 1] = (IndexT) 1;
   for (int i = Dim - 2; i >= 0; --i) {
     stride_[i] = stride_[i + 1] * sizes[i + 1];
   }
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 __host__ __device__
-DeviceTensor<T, Dim>::DeviceTensor(T* data,
-                                   const int sizes[Dim],
-                                   const int strides[Dim])
+DeviceTensor<T, Dim, IndexT, PtrTraits>::DeviceTensor(DataPtrType data,
+                                                      const IndexT sizes[Dim],
+                                                      const IndexT strides[Dim])
     : data_(data) {
   cuda_static_assert(Dim > 0);
 
@@ -64,11 +68,12 @@ DeviceTensor<T, Dim>::DeviceTensor(T* data,
   }
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 template <int OtherDim>
 __host__ __device__ bool
-DeviceTensor<T, Dim>::isSameSizeAndStride(
-  const DeviceTensor<T, OtherDim>& rhs) const {
+DeviceTensor<T, Dim, IndexT, PtrTraits>::isSameSizeAndStride(
+  const DeviceTensor<T, OtherDim, IndexT, PtrTraits>& rhs) const {
   if (Dim != OtherDim) {
     return false;
   }
@@ -86,10 +91,10 @@ DeviceTensor<T, Dim>::isSameSizeAndStride(
   return true;
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 std::string
-DeviceTensor<T, Dim>::toString() const {
-  // FIXME: convert to folly::format once CUDA is C++11-capable
+DeviceTensor<T, Dim, IndexT, PtrTraits>::toString() const {
   std::stringstream ss;
 
   ss << "sizes: [";
@@ -115,31 +120,33 @@ DeviceTensor<T, Dim>::toString() const {
   return ss.str();
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 template <typename U>
-__host__ __device__ DeviceTensor<U, Dim>
-DeviceTensor<T, Dim>::cast() {
+__host__ __device__ DeviceTensor<U, Dim, IndexT, PtrTraits>
+DeviceTensor<T, Dim, IndexT, PtrTraits>::cast() {
   cuda_static_assert(sizeof(U) == sizeof(T));
 
-  return DeviceTensor<U, Dim>(reinterpret_cast<U*>(data_),
-                              size_,
-                              stride_);
+  return DeviceTensor<U, Dim, IndexT, PtrTraits>(
+    reinterpret_cast<U*>(data_), size_, stride_);
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 template <typename U>
-__host__ __device__ const DeviceTensor<U, Dim>
-DeviceTensor<T, Dim>::cast() const {
+__host__ __device__ const DeviceTensor<U, Dim, IndexT, PtrTraits>
+DeviceTensor<T, Dim, IndexT, PtrTraits>::cast() const {
   cuda_static_assert(sizeof(U) == sizeof(T));
 
-  return DeviceTensor<U, Dim>(reinterpret_cast<U*>(data_),
-                              size_,
-                              stride_);
+  return DeviceTensor<U, Dim, IndexT, PtrTraits>(reinterpret_cast<U*>(data_),
+                                                 size_,
+                                                 stride_);
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 long
-DeviceTensor<T, Dim>::numElements() const {
+DeviceTensor<T, Dim, IndexT, PtrTraits>::numElements() const {
   long size = getSize(0);
 
   for (int i = 1; i < Dim; ++i) {
@@ -149,9 +156,11 @@ DeviceTensor<T, Dim>::numElements() const {
   return size;
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 void
-DeviceTensor<T, Dim>::permuteDims(const std::vector<int>& perm) {
+DeviceTensor<T, Dim, IndexT, PtrTraits>::
+permuteDims(const std::vector<int>& perm) {
   // This only works for contiguous tensors since strides are
   // recomputed
 #ifndef __CUDA_ARCH__
@@ -160,7 +169,7 @@ DeviceTensor<T, Dim>::permuteDims(const std::vector<int>& perm) {
                                 "as our dimension");
   }
 
-  if (getStride(Dim - 1) != 1) {
+  if (getStride(Dim - 1) != (IndexT) 1) {
     throw std::invalid_argument("Innermost dimension must have stride 1");
   }
 
@@ -172,8 +181,8 @@ DeviceTensor<T, Dim>::permuteDims(const std::vector<int>& perm) {
 #endif
 
   // Permute
-  int newSizes[Dim];
-  int newStrides[Dim];
+  IndexT newSizes[Dim];
+  IndexT newStrides[Dim];
   for (int i = 0; i < Dim; ++i) {
     newSizes[i] = getSize(perm[i]);
   }
@@ -183,8 +192,8 @@ DeviceTensor<T, Dim>::permuteDims(const std::vector<int>& perm) {
     newStrides[i] = newStrides[i + 1] * newSizes[i + 1];
   }
 
-  detail::copy<Dim>(size_, newSizes);
-  detail::copy<Dim>(stride_, newStrides);
+  detail::copy<IndexT, Dim>(size_, newSizes);
+  detail::copy<IndexT, Dim>(stride_, newStrides);
 
   // Output sanity check
   for (int i = 0; i < Dim; ++i) {
@@ -192,13 +201,14 @@ DeviceTensor<T, Dim>::permuteDims(const std::vector<int>& perm) {
   }
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 __host__ __device__ bool
-DeviceTensor<T, Dim>::isContiguous() const {
+DeviceTensor<T, Dim, IndexT, PtrTraits>::isContiguous() const {
   long prevSize = 1;
 
   for (int i = Dim - 1; i >= 0; --i) {
-    if (getSize(i) != 1) {
+    if (getSize(i) != (IndexT) 1) {
       if (getStride(i) == prevSize) {
         prevSize *= getSize(i);
       } else {
@@ -210,9 +220,10 @@ DeviceTensor<T, Dim>::isContiguous() const {
   return true;
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 __host__ __device__ bool
-DeviceTensor<T, Dim>::isConsistentlySized(int i) const {
+DeviceTensor<T, Dim, IndexT, PtrTraits>::isConsistentlySized(int i) const {
   if (i == 0 && getStride(i) > 0 && getSize(i) > 0) {
     return true;
   } else if ((i > 0) && (i < Dim) && (getStride(i) > 0) &&
@@ -223,9 +234,10 @@ DeviceTensor<T, Dim>::isConsistentlySized(int i) const {
   return false;
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 __host__ __device__ bool
-DeviceTensor<T, Dim>::isConsistentlySized() const {
+DeviceTensor<T, Dim, IndexT, PtrTraits>::isConsistentlySized() const {
   for (int i = 0; i < Dim; ++i) {
     if (!isConsistentlySized(i)) {
       return false;
@@ -235,17 +247,19 @@ DeviceTensor<T, Dim>::isConsistentlySized() const {
   return true;
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 __host__ __device__ bool
-DeviceTensor<T, Dim>::isContiguousDim(int i) const {
+DeviceTensor<T, Dim, IndexT, PtrTraits>::isContiguousDim(int i) const {
   return (i == Dim - 1) || // just in case
     ((i < Dim - 1) &&
      ((getStride(i) / getStride(i + 1)) == getSize(i + 1)));
 }
 
-template <typename T, int Dim>
-__host__ __device__ DeviceTensor<T, Dim>
-DeviceTensor<T, Dim>::transpose(int dim1, int dim2) const {
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
+__host__ __device__ DeviceTensor<T, Dim, IndexT, PtrTraits>
+DeviceTensor<T, Dim, IndexT, PtrTraits>::transpose(int dim1, int dim2) const {
 #ifdef __CUDA_ARCH__
   // Device code
   assert(dim1 >= 0 && dim1 < Dim);
@@ -261,15 +275,15 @@ DeviceTensor<T, Dim>::transpose(int dim1, int dim2) const {
   }
 #endif
 
-  int newSize[Dim];
-  int newStride[Dim];
+  IndexT newSize[Dim];
+  IndexT newStride[Dim];
 
   for (int i = 0; i < Dim; ++i) {
     newSize[i] = size_[i];
     newStride[i] = stride_[i];
   }
 
-  int tmp = newSize[dim1];
+  IndexT tmp = newSize[dim1];
   newSize[dim1] = newSize[dim2];
   newSize[dim2] = tmp;
 
@@ -277,25 +291,26 @@ DeviceTensor<T, Dim>::transpose(int dim1, int dim2) const {
   newStride[dim1] = newStride[dim2];
   newStride[dim2] = tmp;
 
-  return DeviceTensor<T, Dim>(data_, newSize, newStride);
+  return DeviceTensor<T, Dim, IndexT, PtrTraits>(data_, newSize, newStride);
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 template <int NewDim>
-__host__ __device__ DeviceTensor<T, NewDim>
-DeviceTensor<T, Dim>::upcastOuter() {
+__host__ __device__ DeviceTensor<T, NewDim, IndexT, PtrTraits>
+DeviceTensor<T, Dim, IndexT, PtrTraits>::upcastOuter() {
   // Can only create tensors of greater dimension
   cuda_static_assert(NewDim > Dim);
 
-  int newSize[NewDim];
-  int newStride[NewDim];
+  IndexT newSize[NewDim];
+  IndexT newStride[NewDim];
 
   int shift = NewDim - Dim;
 
   for (int i = 0; i < NewDim; ++i) {
     if (i < shift) {
       // These are the extended dimensions
-      newSize[i] = 1;
+      newSize[i] = (IndexT) 1;
       newStride[i] = size_[0] * stride_[0];
     } else {
       // Shift the remaining dimensions
@@ -304,18 +319,19 @@ DeviceTensor<T, Dim>::upcastOuter() {
     }
   }
 
-  return DeviceTensor<T, NewDim>(data_, newSize, newStride);
+  return DeviceTensor<T, NewDim, IndexT, PtrTraits>(data_, newSize, newStride);
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 template <int NewDim>
-__host__ __device__ DeviceTensor<T, NewDim>
-DeviceTensor<T, Dim>::upcastInner() {
+__host__ __device__ DeviceTensor<T, NewDim, IndexT, PtrTraits>
+DeviceTensor<T, Dim, IndexT, PtrTraits>::upcastInner() {
   // Can only create tensors of greater dimension
   cuda_static_assert(NewDim > Dim);
 
-  int newSize[NewDim];
-  int newStride[NewDim];
+  IndexT newSize[NewDim];
+  IndexT newStride[NewDim];
 
   for (int i = 0; i < NewDim; ++i) {
     if (i < Dim) {
@@ -324,18 +340,19 @@ DeviceTensor<T, Dim>::upcastInner() {
       newStride[i] = stride_[i];
     } else {
       // Extended dimensions
-      newSize[i] = 1;
-      newStride[i] = 1;
+      newSize[i] = (IndexT) 1;
+      newStride[i] = (IndexT) 1;
     }
   }
 
-  return DeviceTensor<T, NewDim>(data_, newSize, newStride);
+  return DeviceTensor<T, NewDim, IndexT, PtrTraits>(data_, newSize, newStride);
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 template <int NewDim>
-__host__ __device__ DeviceTensor<T, NewDim>
-DeviceTensor<T, Dim>::downcastOuter() {
+__host__ __device__ DeviceTensor<T, NewDim, IndexT, PtrTraits>
+DeviceTensor<T, Dim, IndexT, PtrTraits>::downcastOuter() {
   // Can only create tensors of lesser dimension
   cuda_static_assert(NewDim < Dim);
 
@@ -356,11 +373,11 @@ DeviceTensor<T, Dim>::downcastOuter() {
 #endif
   }
 
-  int newSize[NewDim];
-  int newStride[NewDim];
+  IndexT newSize[NewDim];
+  IndexT newStride[NewDim];
 
   int ignoredDims = Dim - NewDim;
-  int collapsedSize = 1;
+  IndexT collapsedSize = 1;
 
   for (int i = 0; i < Dim; ++i) {
     if (i < ignoredDims) {
@@ -380,13 +397,15 @@ DeviceTensor<T, Dim>::downcastOuter() {
     }
   }
 
-  return DeviceTensor<T, NewDim>(data_, newSize, newStride);
+  return DeviceTensor<T, NewDim, IndexT, PtrTraits>(
+    data_, newSize, newStride);
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 template <int NewDim>
-__host__ __device__ DeviceTensor<T, NewDim>
-DeviceTensor<T, Dim>::downcastInner() {
+__host__ __device__ DeviceTensor<T, NewDim, IndexT, PtrTraits>
+DeviceTensor<T, Dim, IndexT, PtrTraits>::downcastInner() {
   // Can only create tensors of lesser dimension
   cuda_static_assert(NewDim < Dim);
 
@@ -407,10 +426,10 @@ DeviceTensor<T, Dim>::downcastInner() {
 #endif
   }
 
-  int newSize[NewDim];
-  int newStride[NewDim];
+  IndexT newSize[NewDim];
+  IndexT newStride[NewDim];
 
-  int collapsedSize = 1;
+  IndexT collapsedSize = 1;
 
   for (int i = Dim - 1; i >= 0; --i) {
     if (i >= NewDim) {
@@ -430,39 +449,39 @@ DeviceTensor<T, Dim>::downcastInner() {
     }
   }
 
-  return DeviceTensor<T, NewDim>(data_, newSize, newStride);
+  return DeviceTensor<T, NewDim, IndexT, PtrTraits>(data_, newSize, newStride);
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 template <int SubDim>
-__host__ __device__ DeviceTensor<T, SubDim>
-DeviceTensor<T, Dim>::view(T* at) {
+__host__ __device__ DeviceTensor<T, SubDim, IndexT, PtrTraits>
+DeviceTensor<T, Dim, IndexT, PtrTraits>::view(DataPtrType at) {
   cuda_static_assert(SubDim >= 1 && SubDim < Dim);
 
-  int viewSizes[SubDim];
-  int viewStrides[SubDim];
+  IndexT viewSizes[SubDim];
+  IndexT viewStrides[SubDim];
 
   for (int i = 0; i < SubDim; ++i) {
     viewSizes[i] = size_[Dim - SubDim + i];
     viewStrides[i] = stride_[Dim - SubDim + i];
   }
 
-  return DeviceTensor<T, SubDim>(at, viewSizes, viewStrides);
+  return DeviceTensor<T, SubDim, IndexT, PtrTraits>(at, viewSizes, viewStrides);
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 template <int SubDim>
-__host__ __device__ DeviceTensor<T, SubDim>
-DeviceTensor<T, Dim>::view() {
+__host__ __device__ DeviceTensor<T, SubDim, IndexT, PtrTraits>
+DeviceTensor<T, Dim, IndexT, PtrTraits>::view() {
   return view<SubDim>(data_);
 }
 
-template <typename T, int Dim>
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
 void
-DeviceTensor<T, Dim>::fillAsync(T val, cudaStream_t stream) {
-  // Can only use cudaMemsetAsync with `int` sized types
-  cuda_static_assert(sizeof(T) == sizeof(int));
-
+DeviceTensor<T, Dim, IndexT, PtrTraits>::fillAsync(T val, cudaStream_t stream) {
 #ifndef __CUDA_ARCH__
   if (!isContiguous()) {
     throw std::invalid_argument("fillAsync only works on contiguous data");
