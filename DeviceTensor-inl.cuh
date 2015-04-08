@@ -145,7 +145,7 @@ DeviceTensor<T, Dim, IndexT, PtrTraits>::cast() const {
 
 template <typename T, int Dim,
           typename IndexT, template <typename U> class PtrTraits>
-long
+__host__ __device__ long
 DeviceTensor<T, Dim, IndexT, PtrTraits>::numElements() const {
   long size = getSize(0);
 
@@ -364,7 +364,7 @@ DeviceTensor<T, Dim, IndexT, PtrTraits>::downcastOuter() {
     bool cont = isContiguousDim(i);
 #ifdef __CUDA_ARCH__
     // Device code
-    assert(isContiguousDim(i));
+    assert(cont);
 #else
     // Host code
     if (!cont) {
@@ -417,7 +417,7 @@ DeviceTensor<T, Dim, IndexT, PtrTraits>::downcastInner() {
     bool cont = isContiguousDim(i);
 #ifdef __CUDA_ARCH__
     // Device code
-    assert(isContiguousDim(i));
+    assert(cont);
 #else
     // Host code
     if (!cont) {

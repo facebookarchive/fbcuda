@@ -306,13 +306,21 @@ class DeviceSubTensor<TensorType, 0, PtrTraits> {
 
   /// Use the texture cache for reads
   __device__ __forceinline__ typename TensorType::DataType ldg() const {
+#if __CUDA_ARCH__ >= 350
     return __ldg(data_);
+#else
+    return *data_;
+#endif
   }
 
   /// Use the texture cache for reads; cast as a particular type
   template <typename T>
   __device__ __forceinline__ T ldgAs() const {
+#if __CUDA_ARCH__ >= 350
     return __ldg(dataAs<T>());
+#else
+    return as<T>();
+#endif
   }
 
   private:
@@ -386,6 +394,18 @@ class DeviceSubTensor {
     return data_;
   }
 
+    /// Cast to a different datatype.
+  template <typename T>
+  __host__ __device__ T& as() {
+    return *dataAs<T>();
+  }
+
+  /// Cast to a different datatype (const).
+  template <typename T>
+  __host__ __device__ const T& as() const {
+    return *dataAs<T>();
+  }
+
   /// Cast to a different datatype
   template <typename T>
   __host__ __device__ __forceinline__
@@ -402,13 +422,21 @@ class DeviceSubTensor {
 
   /// Use the texture cache for reads
   __device__ __forceinline__ typename TensorType::DataType ldg() const {
+#if __CUDA_ARCH__ >= 350
     return __ldg(data_);
+#else
+    return *data_;
+#endif
   }
 
   /// Use the texture cache for reads; cast as a particular type
   template <typename T>
   __device__ __forceinline__ T ldgAs() const {
+#if __CUDA_ARCH__ >= 350
     return __ldg(dataAs<T>());
+#else
+    return as<T>();
+#endif
   }
 
   /// Returns a tensor that is a view of the SubDim-dimensional slice
