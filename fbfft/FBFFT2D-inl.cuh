@@ -447,21 +447,21 @@ FBFFTParameters::ErrorCode fbfft2D(
   // Whatever the real input size, we can make assumptions on the
   // complexAsFloat size related to the fft size (because interpolation).
   // If buffer, it must be sized N x (N / 2 +1)
-  assert(complexAsFloat.getSize(2) <= 32 ||
-         (complexAsFloat.getSize(2) ==
-          numHermitian(complexAsFloat.getSize(1))));
+  assert(complexAsFloat.getSize(BatchDims + 1) <= 32 ||
+         (complexAsFloat.getSize(BatchDims + 1) ==
+          numHermitian(complexAsFloat.getSize(BatchDims))));
   // If buffer, it must be sized (N / 2 + 1) x N
-  assert(complexAsFloat.getSize(1) > 32 ||
-         (complexAsFloat.getSize(1) ==
-          numHermitian(complexAsFloat.getSize(2))));
-  if (complexAsFloat.getSize(1) > 256) {
+  assert(complexAsFloat.getSize(BatchDims) > 32 ||
+         (complexAsFloat.getSize(BatchDims) ==
+          numHermitian(complexAsFloat.getSize(BatchDims + 1))));
+  if (complexAsFloat.getSize(BatchDims) > 256) {
     return FBFFTParameters::UnsupportedSize;
   }
 
 #define SELECT_FBFFT_2D_DIF_WARP_SINGLE(                                \
   FFT_SIZE, FFTS_PER_WARP, BIT_REVERSE, ROWS_PER_WARP)                  \
   cuda_static_assert(FFT_SIZE <= WARP_SIZE);                            \
-  if (complexAsFloat.getSize(2) == FFT_SIZE) {                          \
+  if (complexAsFloat.getSize(BatchDims + 1) == FFT_SIZE) {              \
     if (real.getSize(0) % (2 * FFTS_PER_WARP) == 0) {                   \
       dim3 blocks(ceil(real.getSize(0), 2 * FFTS_PER_WARP));            \
       dim3 threads(FFT_SIZE * FFTS_PER_WARP,                            \
@@ -482,7 +482,7 @@ FBFFTParameters::ErrorCode fbfft2D(
   // Above warp level, buffer is needed, output must be N x (N / 2 + 1)
 #define SELECT_FBFFT_2D_DIF_SINGLE(                                     \
   FFT_SIZE, ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE)                    \
-  if (complexAsFloat.getSize(1) == FFT_SIZE) {                          \
+  if (complexAsFloat.getSize(BatchDims) == FFT_SIZE) {                  \
   dim3 blocks(complexAsFloat.getSize(0));                               \
   dim3 threads(WARP_SIZE, BLOCKDIMY);                                   \
   detail::decimateInFrequency2DKernel<                                  \
@@ -502,6 +502,8 @@ FBFFTParameters::ErrorCode fbfft2D(
 #undef SELECT_FBFFT_2D_DIF_WARP_SINGLE
 #undef SELECT_FBFFT_2D_DIF_SINGLE
 
+  LOG(INFO) << "FBFFT unsupported size: " << complexAsFloat << \
+    " with batchdims = " << BatchDims;
   return FBFFTParameters::UnsupportedSize;
 }
 
@@ -520,19 +522,19 @@ FBFFTParameters::ErrorCode fbfft2D(
   // TODO: Starting 512, the occupancy goes down due to shared memory bit
   // reversal.
   // Input is the temporary buffer and must be sized as N x (N / 2 + 1)
-  assert((complexSrc.getSize(2) ==
-          numHermitian(complexSrc.getSize(1))));
+  assert((complexSrc.getSize(BatchDims + 1) ==
+          numHermitian(complexSrc.getSize(BatchDims))));
   // If we are here we must be >= 64
-  assert(complexSrc.getSize(1) >= 64);
+  assert(complexSrc.getSize(BatchDims) >= 64);
   // Output is the real output and must be sized as the input, must enforce
   // this upstream
-  if (complexSrc.getSize(2) > 256) {
+  if (complexSrc.getSize(BatchDims + 1) > 256) {
     return FBFFTParameters::UnsupportedSize;
   }
 
 #define SELECT_FBFFT_2D_DIF_SINGLE(                                     \
   FFT_SIZE, ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE)                    \
-  if (complexSrc.getSize(1) == FFT_SIZE) {                              \
+  if (complexSrc.getSize(BatchDims) == FFT_SIZE) {                      \
     dim3 blocks(complexSrc.getSize(0));                                 \
     dim3 threads(32, BLOCKDIMY);                                        \
     detail::decimateInFrequency2DKernel##FFT_SIZE<                      \

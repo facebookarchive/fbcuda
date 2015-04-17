@@ -552,15 +552,16 @@ FBFFTParameters::ErrorCode fbifft2D(
   // TODO: The limiter for size 256 is the twiddle cross-register shuffle
   // implementation that is currently unrolled by hand.
   bool inputProperlySizedLE32 =
-    srcComplex.getSize(2) > 32 ||
-    (srcComplex.getSize(2) <= 32 &&
-     srcComplex.getSize(1) != numHermitian(srcComplex.getSize(2)));
+    srcComplex.getSize(BatchDims + 1) > 32 ||
+    (srcComplex.getSize(BatchDims + 1) <= 32 &&
+     srcComplex.getSize(BatchDims) !=
+     numHermitian(srcComplex.getSize(BatchDims + 1)));
   bool inputProperlySizedGT32 =
-    srcComplex.getSize(2) <= 32 ||
-    (srcComplex.getSize(2) > 32 &&
-     srcComplex.getSize(1) != srcComplex.getSize(2));
+    srcComplex.getSize(BatchDims + 1) <= 32 ||
+    (srcComplex.getSize(BatchDims + 1) > 32 &&
+     srcComplex.getSize(BatchDims) != srcComplex.getSize(BatchDims + 1));
   if ((!inputProperlySizedLE32 && !inputProperlySizedGT32) ||
-      srcComplex.getSize(2) > 128) {
+      srcComplex.getSize(BatchDims + 1) > 128) {
     return FBFFTParameters::UnsupportedSize;
   }
 
@@ -569,7 +570,7 @@ FBFFTParameters::ErrorCode fbifft2D(
   // cases efficiently.
 #define SELECT_FBFFT_2D_DIF_WARP_SINGLE(                                \
   FFT_SIZE, FFTS_PER_WARP, BIT_REVERSE)                                 \
-  if (srcComplex.getSize(2) == FFT_SIZE) {                              \
+  if (srcComplex.getSize(BatchDims + 1) == FFT_SIZE) {                  \
     if (srcComplex.getSize(0) % (2 * FFTS_PER_WARP) == 0) {             \
       dim3 blocks(ceil(srcComplex.getSize(0), 2 * FFTS_PER_WARP));      \
       /* The factor 2 is already included as Hermitian symmetry */      \
@@ -587,18 +588,18 @@ FBFFTParameters::ErrorCode fbifft2D(
         FFT_SIZE, 1, BIT_REVERSE>                                       \
         <<<blocks, threads, 0, s>>>(srcComplex, realDst);               \
     }                                                                   \
-    return FBFFTParameters::Success;                                      \
+    return FBFFTParameters::Success;                                    \
   }
 
 #define SELECT_FBFFT_2D_DIF_SINGLE(                                     \
   FFT_SIZE, ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE)                    \
-  if (srcComplex.getSize(2) == FFT_SIZE) {                              \
+  if (srcComplex.getSize(BatchDims + 1) == FFT_SIZE) {                  \
     dim3 blocks(ceil(srcComplex.getSize(0), 2));                        \
     dim3 threads(32, BLOCKDIMY);                                        \
     detail::decimateInFrequencyInverse2DKernel##FFT_SIZE<               \
       FFT_SIZE,  ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE>               \
       <<<blocks, threads, 0, s>>>(srcComplex, realDst);                 \
-    return FBFFTParameters::Success;                                      \
+    return FBFFTParameters::Success;                                    \
   }
 
   SELECT_FBFFT_2D_DIF_WARP_SINGLE(2, 16, true);
@@ -613,6 +614,8 @@ FBFFTParameters::ErrorCode fbifft2D(
 #undef SELECT_FBFFT_2D_DIF_WARP_SINGLE
 #undef SELECT_FBFFT_2D_DIF_SINGLE
 
+  LOG(INFO) << "FBIFFT unsupported size: " << srcComplex << \
+    " with batchdims = " << BatchDims;
   return FBFFTParameters::UnsupportedSize;
 }
 
