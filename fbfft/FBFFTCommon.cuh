@@ -22,6 +22,14 @@ __device__ __host__ T numHermitian(T commonCols) {
 
 namespace detail {
 
+__device__ __forceinline__ bool inBounds(
+  int y, int x, int padU, int padL, const DeviceTensor<float, 3>& t) {
+  return (0 <= (y - padU)) &&
+    (0 <= (x - padL)) &&
+    ((y - padU) < t.getSize(1)) &&
+    ((x - padL) < t.getSize(2));
+}
+
 #define PI 3.14159265358979323846264338327f
 
 __device__ __forceinline__
@@ -313,7 +321,8 @@ __device__ __forceinline__ void load1D(const DeviceTensor<float, 2>& real,
                                        const DeviceTensor<float, 3>& complex,
                                        FFT1DCoeffs<FFTSize>& coeffs,
                                        const int batch,
-                                       const int index) {
+                                       const int index,
+                                       const int padL) {
   int LogFFTSize = getMSB<FFTSize>();
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
@@ -327,7 +336,8 @@ __device__ __forceinline__ void load1D(const DeviceTensor<float, 2>& real,
   // TODO: try to do something with float4 and shuffles
   if (ForwardFFT) {
     coeffs[index] =
-      Complex((x < real.getSize(1)) ? real[batch][x].ldg() : 0.0f,
+      Complex((0 <= x - padL && x < real.getSize(1)) ?
+              real[batch][x - padL].ldg() : 0.0f,
               0.0f);
   } else {
     coeffs[index] = (x < complex.getSize(1)) ?
@@ -342,7 +352,8 @@ __device__ __forceinline__ void load1DR2C(const DeviceTensor<float, 2>& real,
                                           const DeviceTensor<float, 3>& complex,
                                           FFT1DCoeffs<FFTSize>& coeffs,
                                           const int batch,
-                                          const int index) {
+                                          const int index,
+                                          const int padL) {
   int LogFFTSize = getMSB<FFTSize>();
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
@@ -354,11 +365,11 @@ __device__ __forceinline__ void load1DR2C(const DeviceTensor<float, 2>& real,
   // reflection and then zero after that to pad till the FFT size.
   if (ForwardFFT) {
     // R2C
-    coeffs[index] = (x < real.getSize(1)) ?
+    coeffs[index] = (0 <= x - padL && x < real.getSize(1)) ?
       // y = x1 + i. x2
-      Complex(real[batch][x],
+      Complex(real[batch][x - padL],
               (EvenDivideBatches || batch + 1 < complex.getSize(0)) ?
-              real[batch + 1][x] : 0.0f) :
+              real[batch + 1][x - padL] : 0.0f) :
       Complex(0.0f);
   } else {
     // C2R
@@ -387,15 +398,16 @@ __device__ __forceinline__ void store1D(DeviceTensor<float, 2>& real,
                                         DeviceTensor<float, 3>& complex,
                                         const FFT1DCoeffs<FFTSize>& coeffs,
                                         const int batch,
-                                        const int index) {
+                                        const int index,
+                                        const int padL) {
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
   if (ForwardFFT && x < complex.getSize(1)) {
     // TODO: try to do something with float4 and shuffles
     complex[batch][x][0].as<Complex>() = coeffs[index];
-  } else if (x < real.getSize(1)) {
+  } else if (0 <= x - padL && x - padL < real.getSize(1)) {
     // TODO: try to do something with float4 and shuffles
-    real[batch][x] = coeffs[index].re();
+    real[batch][x - padL] = coeffs[index].re();
   }
 }
 
@@ -420,7 +432,8 @@ __device__ __forceinline__ void store1DR2C(DeviceTensor<float, 2>& real,
                                            DeviceTensor<float, 3>& complex,
                                            const FFT1DCoeffs<FFTSize>& coeffs,
                                            const int batch,
-                                           const int index) {
+                                           const int index,
+                                           const int padL) {
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
 
@@ -451,10 +464,10 @@ __device__ __forceinline__ void store1DR2C(DeviceTensor<float, 2>& real,
         complex[batch + 1][x][0].as<Complex>() = c2;
       }
     }
-  } else if (x < real.getSize(1)) {
+  } else if (0 <= x - padL && x - padL < real.getSize(1)) {
     real[batch][x] = coeffs[index].re();
     if (EvenDivideBatches || batch + 1 < complex.getSize(0)) {
-      real[batch + 1][x] = coeffs[index].im();
+      real[batch + 1][x - padL] = coeffs[index].im();
     }
   }
 }
@@ -721,7 +734,8 @@ __device__ __forceinline__
 void decimateInFrequency1D(DeviceTensor<float, 2>& real,
                            DeviceTensor<float, 3>& complex,
                            FFT1DCoeffs<FFTSize> (&coeffsArray)[1],
-                           const int batch) {
+                           const int batch,
+                           const int padL) {
   // Cannot be static due to upstream mix of function calls
   assert(FFTSize >= WARP_SIZE);
   assert(blockDim.x == WARP_SIZE);
@@ -732,7 +746,7 @@ void decimateInFrequency1D(DeviceTensor<float, 2>& real,
 #pragma unroll
   for (int i = 0; i < coeffs.ColumnsPerWarp; ++i) {
     load1DR2C<FFTSize, ForwardFFT, EvenDivideBatches>(
-      real, complex, coeffs, batch, i);
+      real, complex, coeffs, batch, i, padL);
     bits.computeBitReversal(i);
   }
   FFT1DRoots<FFTSize> roots;
@@ -766,7 +780,7 @@ void decimateInFrequency1D(DeviceTensor<float, 2>& real,
 #pragma unroll
     for (int reg = 0; reg < coeffs.ColumnsPerWarp; ++reg) {
       store1DR2C<FFTSize, ForwardFFT, EvenDivideBatches>(
-        real, complex, coeffs, batch, reg);
+        real, complex, coeffs, batch, reg, padL);
     }
   }
 }
@@ -778,13 +792,14 @@ template <int FFTSize,
           bool EvenDivideBatches>
 __device__ void decimateInFrequency1DKernel(DeviceTensor<float, 2> real,
                                             DeviceTensor<float, 3> complex,
-                                            int batch) {
+                                            int batch,
+                                            const int padL) {
   int LogFFTSize = getMSB<FFTSize>();
   int LogFFTPerWarp = getMSB<FFTPerWarp>();
   if (FFTSize <= WARP_SIZE) {
     FFT1DCoeffs<FFTSize> coeffs;
     load1DR2C<FFTSize, ForwardFFT, EvenDivideBatches>(
-      real, complex, coeffs, batch, 0);
+      real, complex, coeffs, batch, 0, padL);
     FFT1DBitReversal<FFTSize> bits;
     bits.computeBitReversal(0);
     FFT1DRoots<FFTSize> roots;
@@ -792,11 +807,11 @@ __device__ void decimateInFrequency1DKernel(DeviceTensor<float, 2> real,
     decimateInFrequency1DWarp<FFTSize>(coeffs[0], roots[0]);
     bitReverse1DWarp<FFTSize, FFTPerWarp>(coeffs, bits, 0);
     store1DR2C<FFTSize, ForwardFFT, EvenDivideBatches>(
-      real, complex, coeffs, batch, 0);
+      real, complex, coeffs, batch, 0, padL);
   } else {
     FFT1DCoeffs<FFTSize> coeffs[1];
     decimateInFrequency1D<FFTSize, BatchUnroll, ForwardFFT, EvenDivideBatches>(
-      real, complex, coeffs, batch);
+      real, complex, coeffs, batch, padL);
   }
 }
 
@@ -806,7 +821,8 @@ template <int FFTSize,
           int FFTPerWarp,
           bool ForwardFFT>
 __global__ void decimateInFrequency1DKernel(DeviceTensor<float, 2> real,
-                                            DeviceTensor<float, 3> complex) {
+                                            DeviceTensor<float, 3> complex,
+                                            const int padL) {
   // Ensure proper usage of the BatchUnroll template parameter which controls
   // static shared memory allocation for bit reversals of FFTs >= 64
   // TODO: default template parameter cuda-7
@@ -830,11 +846,11 @@ __global__ void decimateInFrequency1DKernel(DeviceTensor<float, 2> real,
      ) {
     decimateInFrequency1DKernel<
       FFTSize, BatchUnroll, FFTPerWarp, ForwardFFT, false> (
-        real, complex, batch);
+        real, complex, batch, padL);
   } else {
     decimateInFrequency1DKernel<
       FFTSize, BatchUnroll, FFTPerWarp, ForwardFFT, true> (
-        real, complex, batch);
+        real, complex, batch, padL);
   }
 }
 

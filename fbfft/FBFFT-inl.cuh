@@ -17,6 +17,7 @@ template <int BatchDims>
 FBFFTParameters::ErrorCode fbfft1D(
     DeviceTensor<float, BatchDims + 1>& real,
     DeviceTensor<float, BatchDims + 2>& complex,
+    const int padL,
     cudaStream_t s) {
 
   initTwiddles();
@@ -39,7 +40,7 @@ FBFFTParameters::ErrorCode fbfft1D(
                        BATCH_UNROLL));                                  \
       dim3 threads(real.getSize(1) * FFTS_PER_WARP, 1, BATCH_UNROLL);   \
       detail::decimateInFrequency1DKernel<FFT_SIZE, 1, FFTS_PER_WARP, true> \
-        <<<blocks, threads, 0, s>>>(real, complex);                     \
+        <<<blocks, threads, 0, s>>>(real, complex, padL);               \
       return FBFFTParameters::Success;                                  \
     } else if (BATCH_UNROLL == 1 ||                                     \
                real.getSize(0) % (2 * BATCH_UNROLL) == 0) {             \
@@ -47,7 +48,7 @@ FBFFTParameters::ErrorCode fbfft1D(
       dim3 threads(real.getSize(1), 1, BATCH_UNROLL);                   \
       detail::decimateInFrequency1DKernel<FFT_SIZE, 1, 1, true>         \
         <<<blocks, threads, 0, s>>>(                                    \
-          real, complex);                                               \
+          real, complex, padL);                                         \
       return FBFFTParameters::Success;                                  \
     }                                                                   \
   }
@@ -58,7 +59,7 @@ FBFFTParameters::ErrorCode fbfft1D(
   dim3 blocks(ceil(real.getSize(0), (2 * BATCH_UNROLL)));               \
   dim3 threads(WARP_SIZE, 1, BATCH_UNROLL);                             \
   detail::decimateInFrequency1DKernel<FFT_SIZE, BATCH_UNROLL, 1, true>  \
-    <<<blocks, threads, 0, s>>>(real, complex);                         \
+    <<<blocks, threads, 0, s>>>(real, complex, padL);                   \
   return FBFFTParameters::Success;                                      \
 }
 
@@ -86,6 +87,7 @@ template <int BatchDims>
 FBFFTParameters::ErrorCode fbifft1D(
     DeviceTensor<float, BatchDims + 1>& real,
     DeviceTensor<float, BatchDims + 2>& complex,
+    const int padL,
     cudaStream_t s) {
 
   initTwiddles();
@@ -108,13 +110,13 @@ FBFFTParameters::ErrorCode fbifft1D(
                        BATCH_UNROLL));                                  \
       dim3 threads(real.getSize(1) * FFTS_PER_WARP, 1, BATCH_UNROLL);   \
       detail::decimateInFrequency1DKernel<FFT_SIZE, 1, FFTS_PER_WARP, false> \
-        <<<blocks, threads, 0, s>>>(real, complex);                     \
+        <<<blocks, threads, 0, s>>>(real, complex, padL);               \
     } else {                                                            \
       dim3 blocks(ceil(real.getSize(0), 2 * BATCH_UNROLL));             \
       dim3 threads(real.getSize(1), 1, BATCH_UNROLL);                   \
       detail::decimateInFrequency1DKernel<FFT_SIZE, 1, 1, false>        \
         <<<blocks, threads, 0, s>>>(                                    \
-          real, complex);                                               \
+          real, complex, padL);                                         \
     }                                                                   \
     return FBFFTParameters::Success;                                    \
   }
@@ -125,7 +127,7 @@ FBFFTParameters::ErrorCode fbifft1D(
     dim3 blocks(ceil(real.getSize(0), 2 * BATCH_UNROLL));               \
     dim3 threads(WARP_SIZE, 1, BATCH_UNROLL);                           \
     detail::decimateInFrequency1DKernel<FFT_SIZE, BATCH_UNROLL, 1, false> \
-      <<<blocks, threads, 0, s>>>(real, complex);                       \
+      <<<blocks, threads, 0, s>>>(real, complex, padL);                 \
     return FBFFTParameters::Success;                                    \
   }
 

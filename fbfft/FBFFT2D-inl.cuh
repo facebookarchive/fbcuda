@@ -21,7 +21,9 @@ __device__ __forceinline__ void load2D(
     FFT1DCoeffs<FFTSize>& coeffs,
     const int batch,
     const int indexX,
-    const int indexY) {
+    const int indexY,
+    const int padL,
+    const int padU) {
   int LogFFTSize = getMSB<FFTSize>();
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + indexX * blockDim.x;
@@ -30,8 +32,8 @@ __device__ __forceinline__ void load2D(
 
   // Zero padding without a need to copy the input data to a larger array.
   coeffs[indexX] =
-    Complex((y < real.getSize(1) && x < real.getSize(2)) ?
-            real[batch][y][x].ldg() : 0.0f,
+    Complex(inBounds(y, x, padU, padL, real) ?
+            real[batch][y - padU][x - padL].ldg() : 0.0f,
             0.0f);
 }
 
@@ -41,7 +43,9 @@ __device__ __forceinline__ void load2DR2C(
     FFT1DCoeffs<FFTSize>& coeffs,
     const int batch,
     const int indexX,
-    const int indexY) {
+    const int indexY,
+    const int padL,
+    const int padU) {
   int LogFFTSize = getMSB<FFTSize>();
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + indexX * blockDim.x;
@@ -49,10 +53,10 @@ __device__ __forceinline__ void load2DR2C(
   int y = adjustedThreadIdxY<FFTSize>() + indexY * blockDim.y;
 
   // Zero padding without a need to copy the input data to a larger array.
-  coeffs[indexX] = (y < real.getSize(1) && x < real.getSize(2)) ?
-    Complex(real[batch][y][x].ldg(),
+  coeffs[indexX] = (inBounds(y, x, padU, padL, real)) ?
+    Complex(real[batch][y - padU][x - padL].ldg(),
             (EvenDivideBatches || batch + 1 < real.getSize(0)) ?
-            real[batch + 1][y][x].ldg()
+            real[batch + 1][y - padU][x - padL].ldg()
             :
             0.0f)
     :
@@ -114,7 +118,10 @@ __device__ __forceinline__ void transpose2DHermitianMultiple(
 
 template <int FFTSize, int FFTPerWarp, int RowsPerWarp, bool BitReverse>
 __global__ void decimateInFrequencyHermitian2DWarpKernel(
-    DeviceTensor<float, 3> real, DeviceTensor<float, 4> complexAsFloat) {
+    DeviceTensor<float, 3> real,
+    DeviceTensor<float, 4> complexAsFloat,
+    const int padL,
+    const int padU) {
   cuda_static_assert(!(FFTPerWarp & (FFTPerWarp - 1)));
   cuda_static_assert(FFTPerWarp * FFTSize <= WARP_SIZE);
   // Only let FFTs <= 8 have multiple per warp, 16 and 32 perform better with
@@ -136,7 +143,7 @@ __global__ void decimateInFrequencyHermitian2DWarpKernel(
   FFT1DCoeffs<FFTSize> coeffsArray2[2][RowsPerWarp];
 #pragma unroll
   for (int i = 0; i < RowsPerWarp; ++i) {
-    load2DR2C<FFTSize, false>(real, coeffsArray[i], batch, 0, i);
+    load2DR2C<FFTSize, false>(real, coeffsArray[i], batch, 0, i, padL, padU);
   }
 
   // Twiddles is the same as for 1D but fully data parallel across threadIdx.y
@@ -219,7 +226,9 @@ template <int FFTSize, int RowsPerKernel, int BlockDimY, bool BitReverse>
 __launch_bounds__(32 * 8, 4) // 64 X 64 and 128 x 128
 __global__ void decimateInFrequency2DKernel(
     DeviceTensor<float, 3> real,
-    DeviceTensor<float, 4> complexAsFloat) {
+    DeviceTensor<float, 4> complexAsFloat,
+    const int padL,
+    const int padU) {
   assert(blockDim.x == WARP_SIZE);
   assert(blockDim.y == BlockDimY);
   assert(real.getSize(0) == complexAsFloat.getSize(0));
@@ -248,8 +257,8 @@ __global__ void decimateInFrequency2DKernel(
       for (int reg = 0; reg < ColumnsPerWarp; ++reg) {
         int x = threadIdx.x + reg * blockDim.x;
         coeffsArray[row][reg] =
-          Complex((y < real.getSize(1) && x < real.getSize(2)) ?
-                  real[batch][y][x].ldg() : 0.0f,
+          Complex(inBounds(y, x, padU, padL, real) ?
+                  real[batch][y - padU][x - padL].ldg() : 0.0f,
                   0.0f);
       }
     }
@@ -437,6 +446,8 @@ template <int BatchDims>
 FBFFTParameters::ErrorCode fbfft2D(
     DeviceTensor<float, BatchDims + 2>& real,
     DeviceTensor<float, BatchDims + 3>& complexAsFloat,
+    const int padL,
+    const int padU,
     cudaStream_t s) {
   initTwiddles();
 
@@ -468,13 +479,13 @@ FBFFTParameters::ErrorCode fbfft2D(
                    ceil(FFT_SIZE, ROWS_PER_WARP));                      \
       detail::decimateInFrequencyHermitian2DWarpKernel<                 \
         FFT_SIZE, FFTS_PER_WARP, ROWS_PER_WARP, BIT_REVERSE>            \
-        <<<blocks, threads, 0, s>>>(real, complexAsFloat);              \
+        <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);  \
     } else {                                                            \
       dim3 blocks(ceil(complexAsFloat.getSize(0), 2));                  \
       dim3 threads(FFT_SIZE, FFT_SIZE);                                 \
       detail::decimateInFrequencyHermitian2DWarpKernel<                 \
         FFT_SIZE, 1, 1, BIT_REVERSE>                                    \
-        <<<blocks, threads, 0, s>>>(real, complexAsFloat);              \
+        <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);  \
     }                                                                   \
     return FBFFTParameters::Success;                                    \
   }
@@ -487,7 +498,7 @@ FBFFTParameters::ErrorCode fbfft2D(
   dim3 threads(WARP_SIZE, BLOCKDIMY);                                   \
   detail::decimateInFrequency2DKernel<                                  \
     FFT_SIZE,  ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE>                 \
-    <<<blocks, threads, 0, s>>>(real, complexAsFloat);                  \
+    <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);      \
   return FBFFTParameters::Success;                                      \
 }
 

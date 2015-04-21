@@ -138,14 +138,16 @@ __device__ __forceinline__ void store2D(
     const FFT1DCoeffs<FFTSize>& coeffs,
     const int batch,
     const int indexCol,
-    const int indexRow) {
+    const int indexRow,
+    const int padL,
+    const int padU) {
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int col = adjustedThreadIdxX<FFTSize>() + indexCol * blockDim.x;
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int row = adjustedThreadIdxY<FFTSize>() + indexRow * blockDim.y;
-  if (row < real.getSize(1) && col < real.getSize(2)) {
+  if (inBounds(row, col, padU, padL, real)) {
     // TODO: try to do something with float4 and shuffles
-    real[batch][row][col] = coeffs[indexCol].re();
+    real[batch][row - padU][col - padL] = coeffs[indexCol].re();
   }
 }
 
@@ -155,16 +157,19 @@ __device__ __forceinline__ void store2D2(
     const FFT1DCoeffs<FFTSize>& coeffs,
     const int batch,
     const int indexCol,
-    const int indexRow) {
+    const int indexRow,
+    const int padL,
+    const int padU) {
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int col = adjustedThreadIdxX<FFTSize>() + indexCol * blockDim.x;
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int row = adjustedThreadIdxY<FFTSize>() + indexRow * blockDim.y;
-  if (row < real.getSize(1) && col < real.getSize(2)) {
+  if (inBounds(row, col, padU, padL, real)) {
     // TODO: try to do something with float4 and shuffles
-    real[batch][row][col] = coeffs[indexCol].re();
+    real[batch][row - padU][col - padL] = coeffs[indexCol].re();
     if (batch + gridDim.x < real.getSize(0)) {
-      real[batch + FFTPerWarp * gridDim.x][row][col] = coeffs[indexCol].im();
+      real[batch + FFTPerWarp * gridDim.x][row - padU][col - padL] =
+        coeffs[indexCol].im();
     }
   }
 }
@@ -173,7 +178,9 @@ __device__ __forceinline__ void store2D2(
 template <int FFTSize, int FFTPerWarp, bool BitReverse>
 __global__ void decimateInFrequencyInverseHermitian2DWarpKernel(
     DeviceTensor<Complex, 3> src,
-    DeviceTensor<float, 3> dst) {
+    DeviceTensor<float, 3> dst,
+    const int padL,
+    const int padU) {
   assert(src.getStride(2) == 1);
   assert(dst.getStride(2) == 1);
 
@@ -200,7 +207,8 @@ __global__ void decimateInFrequencyInverseHermitian2DWarpKernel(
   roots.template twiddles<false>();
 
   load2D2a<Complex, FFTSize, 3>(src, coeffs, batch, 0, 0, 0);
-  load2D2b<Complex, FFTSize, 3>(src, coeffs, batch + FFTPerWarp * gridDim.x, 0, 0, 0);
+  load2D2b<Complex, FFTSize, 3>(
+    src, coeffs, batch + FFTPerWarp * gridDim.x, 0, 0, 0);
 
   decimateInFrequency1DWarp<FFTSize>(coeffs[0], roots[0]);
   FFT1DBitReversal<FFTSize> bits;
@@ -229,7 +237,7 @@ __global__ void decimateInFrequencyInverseHermitian2DWarpKernel(
   // If needed, could reintroduce the "untranspose" feature but this is
   // expensive for sizes > 32
 
-  store2D2<FFTSize, FFTPerWarp>(dst, coeffs, batch, 0, 0);
+  store2D2<FFTSize, FFTPerWarp>(dst, coeffs, batch, 0, 0, padL, padU);
 }
 
 
@@ -277,8 +285,10 @@ __device__ __forceinline__ void decimateInFrequencyInverse2DKernel(
     for (int row = 0; row < RowsPerKernel; ++row) {
 #pragma unroll
       for (int reg = 0; reg < ColumnsPerWarp; ++reg) {
-        load2D2a<float, FFTSize, 4>(src, coeffsArray[row], batch, yiter, row, reg);
-        load2D2b<float, FFTSize, 4>(src, coeffsArray[row], batch + gridDim.x, yiter, row, reg);
+        load2D2a<float, FFTSize, 4>(
+          src, coeffsArray[row], batch, yiter, row, reg);
+        load2D2b<float, FFTSize, 4>(
+          src, coeffsArray[row], batch + gridDim.x, yiter, row, reg);
       }
     }
 
@@ -345,7 +355,9 @@ __device__ __forceinline__ void decimateInFrequencyInverse2DKernel(
 template <int FFTSize, int RowsPerKernel, int BlockDimY, bool BitReverse>
 __device__ __forceinline__ void decimateInFrequencyInverse2DKernel(
     const DeviceTensor<Complex, 3> src,
-    DeviceTensor<float, 3> real) {
+    DeviceTensor<float, 3> real,
+    const int padL,
+    const int padU) {
   assert(src.getStride(2) == 1);
   assert(real.getStride(2) == 1);
   assert(blockDim.x == WARP_SIZE);
@@ -444,10 +456,11 @@ __device__ __forceinline__ void decimateInFrequencyInverse2DKernel(
 #pragma unroll
       for (int reg = 0; reg < ColumnsPerWarp; ++reg) {
         int ccol = threadIdx.x + reg * blockDim.x;
-        if (rrow < real.getSize(1) && ccol < real.getSize(2)) {
-          real[batch][rrow][ccol] = coeffsArray[row][reg].re();
+        if (inBounds(rrow, ccol, padU, padL, real)) {
+          real[batch][rrow - padU][ccol - padL] = coeffsArray[row][reg].re();
           if (batch + gridDim.x < real.getSize(0)) {
-            real[batch + gridDim.x][rrow][ccol] = coeffsArray[row][reg].im();
+            real[batch + gridDim.x][rrow - padU][ccol - padL] =
+              coeffsArray[row][reg].im();
           }
         }
       }
@@ -481,21 +494,25 @@ template <int FFTSize, int RowsPerKernel, int BlockDimY, bool BitReverse>
 __launch_bounds__(32 * 32, 2)
 __global__ void decimateInFrequencyInverse2DKernel64(
     const DeviceTensor<Complex, 3> src,
-    DeviceTensor<float, 3> real) {
+    DeviceTensor<float, 3> real,
+    const int padL,
+    const int padU) {
   decimateInFrequencyInverse2DKernel<FFTSize,
                                      RowsPerKernel,
                                      BlockDimY,
-                                     BitReverse>(src, real);
+                                     BitReverse>(src, real, padL, padU);
 }
 
 template <int FFTSize, int RowsPerKernel, int BlockDimY, bool BitReverse>
 __global__ void decimateInFrequencyInverse2DKernel128(
     const DeviceTensor<Complex, 3> src,
-    DeviceTensor<float, 3> real) {
+    DeviceTensor<float, 3> real,
+    const int padL,
+    const int padU) {
   decimateInFrequencyInverse2DKernel<FFTSize,
                                      RowsPerKernel,
                                      BlockDimY,
-                                     BitReverse>(src, real);
+                                     BitReverse>(src, real, padL, padU);
 }
 
 } // namespace
@@ -545,6 +562,8 @@ template <int BatchDims>
 FBFFTParameters::ErrorCode fbifft2D(
     DeviceTensor<Complex, BatchDims + 2>& srcComplex,
     DeviceTensor<float, BatchDims + 2>& realDst,
+    const int padL,
+    const int padU,
     cudaStream_t s) {
 
   initTwiddles();
@@ -579,14 +598,14 @@ FBFFTParameters::ErrorCode fbifft2D(
                    FFT_SIZE);                                           \
       detail::decimateInFrequencyInverseHermitian2DWarpKernel<          \
         FFT_SIZE, FFTS_PER_WARP, BIT_REVERSE>                           \
-        <<<blocks, threads, 0, s>>>(srcComplex, realDst);               \
+        <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);   \
     } else {                                                            \
       dim3 blocks(ceil(srcComplex.getSize(0), 2));                      \
       dim3 threads(FFT_SIZE,                                            \
                    FFT_SIZE);                                           \
       detail::decimateInFrequencyInverseHermitian2DWarpKernel<          \
         FFT_SIZE, 1, BIT_REVERSE>                                       \
-        <<<blocks, threads, 0, s>>>(srcComplex, realDst);               \
+        <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);   \
     }                                                                   \
     return FBFFTParameters::Success;                                    \
   }
@@ -598,7 +617,7 @@ FBFFTParameters::ErrorCode fbifft2D(
     dim3 threads(32, BLOCKDIMY);                                        \
     detail::decimateInFrequencyInverse2DKernel##FFT_SIZE<               \
       FFT_SIZE,  ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE>               \
-      <<<blocks, threads, 0, s>>>(srcComplex, realDst);                 \
+      <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);     \
     return FBFFTParameters::Success;                                    \
   }
 
