@@ -40,7 +40,8 @@ template <bool ConjugateTransposeA,
           bool StaticUnrollCI,
           bool StaticUnrollCJ,
           bool StaticUnrollXY,
-          bool StaticUnrollReduction>
+          bool StaticUnrollReduction,
+          bool Accumulate>
 __launch_bounds__(32 * 32, 1)
 __global__ void transposeMMTiledKernel(const DeviceTensor<Complex, 3> A,
                                        const DeviceTensor<Complex, 3> B,
@@ -148,7 +149,7 @@ __global__ void transposeMMTiledKernel(const DeviceTensor<Complex, 3> A,
           if (k == 0) {
             for (int ii = 0; ii < TileI; ++ii) {
               for (int jj = 0; jj < TileJ; ++jj) {
-                c[ii][jj] = Complex(0.0f);
+                c[ii][jj] = (Accumulate) ? C[i + ii][j + jj][xy] : Complex(0.0f);
               }
             }
           }
@@ -194,7 +195,8 @@ struct HalfFtor {
 
 } // ns detail
 
-template <int Dim, bool ConjugateTransposeA, bool ConjugateTransposeB>
+template
+<int Dim, bool ConjugateTransposeA, bool ConjugateTransposeB, bool Accumulate>
 void transposeMM(DeviceTensor<float, Dim>& A,
                  DeviceTensor<float, Dim>& B,
                  DeviceTensor<float, Dim>& C,
@@ -238,7 +240,7 @@ void transposeMM(DeviceTensor<float, Dim>& A,
     bool StaticUnrollCI = (dcC.getSize(0) % TileI == 0);                \
     bool StaticUnrollCJ = (dcC.getSize(1) % (BlockDimY * TileJ) == 0);  \
     bool StaticUnrollXY = (dcC.getSize(2) % (GridDimZ * BlockDimX) == 0); \
-    const int numRed =                                         \
+    const int numRed =                                                  \
       (ConjugateTransposeA) ? dcA.getSize(0) : dcA.getSize(1);          \
     bool StaticUnrollReduction = (numRed % TileK == 0);                 \
     count++;                                                            \
@@ -271,7 +273,8 @@ void transposeMM(DeviceTensor<float, Dim>& A,
                                      true,                              \
                                      true,                              \
                                      true,                              \
-                                     true>                              \
+                                     true,                              \
+                                     Accumulate>                        \
         <<<blocks, threads, 0, s>>>(dcA, dcB, dcC, Complex(invNorm));   \
       return;                                                           \
     }                                                                   \
@@ -313,6 +316,10 @@ void transposeMM(DeviceTensor<float, Dim>& A,
   INSTANTIATE_FBMM_FULLY_UNROLLED(4, 8, 2, /* */ 4, 2, 2);
   INSTANTIATE_FBMM_FULLY_UNROLLED(4, 4, 1, /* */ 4, 2, 2);
 
+  if (debug) {
+    LOG(WARNING) << "Unspecialized case, performance will be bad";
+  }
+
   // Default case, performance wil most likely be bad if we get here
 #define TileI 8
 #define TileJ 2
@@ -337,7 +344,8 @@ void transposeMM(DeviceTensor<float, Dim>& A,
                                  false,
                                  false,
                                  false,
-                                 false>
+                                 false,
+                                 Accumulate>
     <<<blocks, threads, 0, s>>>(dcA, dcB, dcC, Complex(invNorm));
 }
 
