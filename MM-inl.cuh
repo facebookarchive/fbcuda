@@ -312,12 +312,15 @@ void transposeMM(DeviceTensor<float, Dim>& A,
   }
 
   // Fallback cases
+  if (debug) {
+    LOG(WARNING) << "Fallback case, performance will be bad";
+  }
   INSTANTIATE_FBMM_FULLY_UNROLLED(8, 8, 4, /* */ 8, 2, 2);
   INSTANTIATE_FBMM_FULLY_UNROLLED(4, 8, 2, /* */ 4, 2, 2);
   INSTANTIATE_FBMM_FULLY_UNROLLED(4, 4, 1, /* */ 4, 2, 2);
 
   if (debug) {
-    LOG(WARNING) << "Unspecialized case, performance will be bad";
+    LOG(WARNING) << "Unspecialized case, performance will be very bad";
   }
 
   // Default case, performance wil most likely be bad if we get here
