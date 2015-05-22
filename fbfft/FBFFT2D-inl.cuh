@@ -1,10 +1,13 @@
 // Copyright 2004-present Facebook. All Rights Reserved.
 
+#pragma once
+
 #include "cuda/Complex.cuh"
 #include "cuda/ComputeCapabilities.cuh"
 #include "cuda/CudaUtils.cuh"
 #include "cuda/DeviceTensor.cuh"
 #include "cuda/fbfft/FBFFTCommon.cuh"
+#include "cuda/fbfft/FFT2D32.cuh"
 
 #include <cuda_runtime.h>
 #include <glog/logging.h>
@@ -467,6 +470,28 @@ FBFFTParameters::ErrorCode fbfft2D(
           numHermitian(complexAsFloat.getSize(BatchDims + 1))));
   if (complexAsFloat.getSize(BatchDims) > 256) {
     return FBFFTParameters::UnsupportedSize;
+  }
+
+#define BATCHES_PER_WARP 2
+#define WARPS_PER_BLOCK 1
+  if (complexAsFloat.getSize(BatchDims + 1) == 32) {
+    CHECK_EQ(1, BatchDims);
+    // TODO: From getDeviceProperties
+    int maxBlocks = 32768; // 65536;
+    int blx = 1;
+    int bly = ceil(real.getSize(0), WARPS_PER_BLOCK);
+    bly = ceil(bly, BATCHES_PER_WARP);
+    if (bly > maxBlocks) {
+      blx = maxBlocks;
+      bly = ceil(bly, maxBlocks);
+    }
+    CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_WARP * WARPS_PER_BLOCK);
+    dim3 blocks(blx, bly);
+    dim3 threads(32, WARPS_PER_BLOCK);
+    detail::fbfft2D32<BatchDims, 32, WARPS_PER_BLOCK, BATCHES_PER_WARP>
+      <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
+    CHECK_EQ(cudaSuccess, cudaGetLastError());
+    return FBFFTParameters::Success;
   }
 
 #define SELECT_FBFFT_2D_DIF_WARP_SINGLE(                                \

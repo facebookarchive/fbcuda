@@ -1,10 +1,13 @@
 // Copyright 2004-present Facebook. All Rights Reserved.
 
+#pragma once
+
 #include "cuda/Complex.cuh"
 #include "cuda/ComputeCapabilities.cuh"
 #include "cuda/CudaUtils.cuh"
 #include "cuda/DeviceTensor.cuh"
 #include "cuda/fbfft/FBFFTCommon.cuh"
+#include "cuda/fbfft/FFT2D32.cuh"
 
 #include <cuda_runtime.h>
 #include <glog/logging.h>
@@ -582,6 +585,28 @@ FBFFTParameters::ErrorCode fbifft2D(
   if ((!inputProperlySizedLE32 && !inputProperlySizedGT32) ||
       srcComplex.getSize(BatchDims + 1) > 128) {
     return FBFFTParameters::UnsupportedSize;
+  }
+
+#define BATCHES_PER_WARP 1
+#define WARPS_PER_BLOCK 1
+  if (srcComplex.getSize(BatchDims + 1) == 32) {
+    CHECK_EQ(1, BatchDims);
+    // TODO: From getDeviceProperties
+    int maxBlocks = 32768; // 65536;
+    int blx = 1;
+    int bly = ceil(realDst.getSize(0), WARPS_PER_BLOCK);
+    bly = ceil(bly, BATCHES_PER_WARP);
+    if (bly > maxBlocks) {
+      blx = maxBlocks;
+      bly = ceil(bly, maxBlocks);
+    }
+    CHECK_LE(realDst.getSize(0), blx * bly * BATCHES_PER_WARP * WARPS_PER_BLOCK);
+    dim3 blocks(blx, bly);
+    dim3 threads(32, WARPS_PER_BLOCK);
+    detail::fbifft2D32NoHermitian<BatchDims, 32>
+      <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);
+    CHECK_EQ(cudaSuccess, cudaGetLastError());
+    return FBFFTParameters::Success;
   }
 
   // TODO: this drops to 1 FFT per warp if batch size is not an even multiple

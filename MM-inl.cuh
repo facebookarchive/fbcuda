@@ -149,7 +149,12 @@ __global__ void transposeMMTiledKernel(const DeviceTensor<Complex, 3> A,
           if (k == 0) {
             for (int ii = 0; ii < TileI; ++ii) {
               for (int jj = 0; jj < TileJ; ++jj) {
-                c[ii][jj] = (Accumulate) ? C[i + ii][j + jj][xy] : Complex(0.0f);
+                c[ii][jj] =
+                  (Accumulate &&
+                   (StaticUnrollCI || i + ii < C.getSize(0)) &&
+                   (StaticUnrollCJ || j + jj < C.getSize(1)) &&
+                   (StaticUnrollXY || xy < NumBatches)) ?
+                     C[i + ii][j + jj][xy] : Complex(0.0f);
               }
             }
           }
@@ -303,25 +308,38 @@ void transposeMM(DeviceTensor<float, Dim>& A,
     // Imagenet 4-GPU model parallel 128x96x96
     INSTANTIATE_FBMM_FULLY_UNROLLED(16, 12, 6, /* */ 8, 2, 2);
     INSTANTIATE_FBMM_FULLY_UNROLLED(12, 12, 6, /* */ 8, 2, 2);
+    // TODO: VGG first layer, pretty bad use case for this fbmm because
+    // of the 3 dimension in 64 x 3 x 64
   } else if (dcA.getSize(2) == 17 * 32) {
     // Imagenet 4-GPU model parallel 128x24x64
     INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 8, 2, 2);
     INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 4, 2, 2);
+    // VGG first layer, pretty bad use case for this fbmm because
+    // of the 3 dimension in 64 x 3 x 64
+    INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 3, 2, 2);
+    INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 3, 2, 2);
+    INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 2, 3, 2);
+    INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 2, 3, 2);
+    INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 2, 2, 3);
+    INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 2, 2, 3);
+    INSTANTIATE_FBMM_FULLY_UNROLLED(1, 16, 17, /* */ 1, 2, 2);
+    INSTANTIATE_FBMM_FULLY_UNROLLED(1, 16, 17, /* */ 1, 3, 2);
+    INSTANTIATE_FBMM_FULLY_UNROLLED(1, 16, 17, /* */ 1, 2, 3);
   } else if (dcA.getSize(2) == 33 * 64) {
   } else if (dcA.getSize(2) == 65 * 128) {
   }
 
   // Fallback cases
-  if (debug) {
+//  if (debug) {
     LOG(WARNING) << "Fallback case, performance will be bad";
-  }
+//  }
   INSTANTIATE_FBMM_FULLY_UNROLLED(8, 8, 4, /* */ 8, 2, 2);
   INSTANTIATE_FBMM_FULLY_UNROLLED(4, 8, 2, /* */ 4, 2, 2);
   INSTANTIATE_FBMM_FULLY_UNROLLED(4, 4, 1, /* */ 4, 2, 2);
 
-  if (debug) {
+//  if (debug) {
     LOG(WARNING) << "Unspecialized case, performance will be very bad";
-  }
+//  }
 
   // Default case, performance wil most likely be bad if we get here
 #define TileI 8
