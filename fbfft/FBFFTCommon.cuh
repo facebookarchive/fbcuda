@@ -24,13 +24,17 @@ namespace detail {
 
 __device__ __forceinline__ bool inBounds(
   int y, int x, int padU, int padL, const DeviceTensor<float, 3>& t) {
-  return (0 <= (y - padU)) &&
-    (0 <= (x - padL)) &&
-    ((y - padU) < t.getSize(1)) &&
-    ((x - padL) < t.getSize(2));
+  return ((unsigned)(y - padU) < (unsigned)(t.getSize(1)) &&
+          (unsigned)(x - padL) < (unsigned)(t.getSize(2)));
 }
 
-#define PI 3.14159265358979323846264338327f
+__device__ __forceinline__ bool inBounds(
+  int y, int x, int padU, int padL, const DeviceTensor<float, 4>& t) {
+  return ((unsigned)(y - padU) < (unsigned)(t.getSize(2)) &&
+          (unsigned)(x - padL) < (unsigned)(t.getSize(3)));
+}
+
+#define PI 0x1.921FB6p+1f
 
 __device__ __forceinline__
 unsigned int reverse(unsigned int x, unsigned int nbits) {
