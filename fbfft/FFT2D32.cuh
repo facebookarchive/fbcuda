@@ -17,6 +17,9 @@
 #include "cuda/DeviceTensor.cuh"
 #include "cuda/fbfft/FBFFTCommon.cuh"
 
+#define ENABLE_CUDA_DEBUG
+#include "cuda/CudaDebugUtils.cuh"
+
 #include <cuda_runtime.h>
 
 #include <cassert>
@@ -125,6 +128,21 @@ namespace detail {
 #define exp_15_32  Complex(-COS_01_PI_16, -SIN_01_PI_16)
 
 template< int > __device__ inline int rev(int);
+
+template<> __device__ inline int rev<8>(int i)
+{
+  switch (i) {
+    case  0:  return 0;
+    case  1:  return 4;
+    case  2:  return 2;
+    case  3:  return 6;
+    case  4:  return 1;
+    case  5:  return 5;
+    case  6:  return 3;
+    case  7:  return 7;
+    default:  return 0;
+  }
+}
 
 template<> __device__ inline int rev<16>(int i)
 {
@@ -274,11 +292,27 @@ static __device__ inline void FFT32(Complex* a)
   FFT16(a + 16);
 }
 
+template<int N>
+static __device__ inline void fft2dCore(Complex *a);
+
+template<> void fft2dCore<8>(Complex* a) {
+  FFT8(a);
+}
+
+template<> void fft2dCore<16>(Complex* a) {
+  FFT16(a);
+}
+
+template<> void fft2dCore<32>(Complex* a) {
+  FFT32(a);
+}
+
 template <int FFTSize>
 __device__ inline void inefficientTranspose(
     Complex* a,
     // pass shared memory buffer or lose 2x perf
     float (*sharedMem)[FFTSize][FFTSize + 1]) {
+
   for (int i = 0 ; i < FFTSize; ++i) {
     sharedMem[threadIdx.y][i][threadIdx.x] = a[i].re();
   }
@@ -294,109 +328,219 @@ __device__ inline void inefficientTranspose(
   for (int i = 0 ; i < FFTSize; ++i) {
     a[i].im() = sharedMem[threadIdx.y][threadIdx.x][i];
   }
+}
+
+
+// TODO: Partial specialization, constexpr
+template <int BatchesPerBlock, int FFTSize, bool InverseFFT>
+__device__ inline void inefficientTranspose(Complex* a);
+
+///////////////////// FFT Transpose Specializations ///////////////////
+
+// TODO: Partial specialization, constexpr
+template <>
+__device__ inline void inefficientTranspose<2, 32, false>(Complex* a) {
+  __shared__ float sharedMem[1][32 / 2 + 1][32 + 1];
+
+  assert(blockDim.y == 2);
+
+  if (threadIdx.y == 0) {
+    for (int i = 0 ; i < 32 / 2 + 1; ++i) {
+      sharedMem[0][i][threadIdx.x] = a[i].re();
+    }
+    if (threadIdx.x < 32 / 2 + 1) {
+      for (int i = 0 ; i < 32; ++i) {
+        a[i].re() = sharedMem[0][threadIdx.x][i];
+      }
+    }
+  }
   __syncthreads();
-}
-
-// Baseline 32x32 version for a single batch at a time
-// Does not use Hermitian symmetry but is easy to understand
-template <int BatchDims, int FFTSize>
-__device__ inline void fbfft2D32NoHermitianDevice(
-    DeviceTensor<float, BatchDims + 2> real,
-    DeviceTensor<float, BatchDims + 3> complexAsFloat,
-    // pass shared memory buffer or lose 2x perf
-    float (*sharedMem)[FFTSize][FFTSize + 1],
-    const int batch,
-    const int padL,
-    const int padU) {
-
-  // Start with an inefficient implementation, no symmetry atm
-  Complex a[FFTSize];
-  // A. Read in data
-  for (int i = 0 ; i < FFTSize; ++i) {
-    a[i] = inBounds(i, threadIdx.x, padU, padL, real) ?
-      Complex(real[batch][i - padU][threadIdx.x - padL].ldg()) :
-      Complex(0.0f, 0.0f);
-  }
-
-  // B. FFT the cols
-  FFT32(a);
-
-  // C. Bit reverse
-#pragma unroll
-  for (int i = 0; i < 32; ++i) {
-    if (i < detail::rev<32>(i)) {
-      // Avoid double swap
-      swap(a[i], a[detail::rev<32>(i)]);
+  if (threadIdx.y == 1) {
+    for (int i = 0 ; i < 32 / 2 + 1; ++i) {
+      sharedMem[0][i][threadIdx.x] = a[i].re();
+    }
+    if (threadIdx.x < 32 / 2 + 1) {
+      for (int i = 0 ; i < 32; ++i) {
+        a[i].re() = sharedMem[0][threadIdx.x][i];
+      }
     }
   }
-
-  // D. Inefficiently transpose
-  inefficientTranspose<FFTSize> (a, sharedMem);
-
-  // E. FFT the rows
-  FFT32(a);
-
-  // F. Bit reverse
-#pragma unroll
-  for (int i = 0; i < 32; ++i) {
-    if (i < detail::rev<32>(i)) {
-      // Avoid double swap
-      swap(a[i], a[detail::rev<32>(i)]);
+  __syncthreads();
+  if (threadIdx.y == 0) {
+    for (int i = 0 ; i < 32 / 2 + 1; ++i) {
+      sharedMem[0][i][threadIdx.x] = a[i].im();
+    }
+    if (threadIdx.x < 32 / 2 + 1) {
+      for (int i = 0 ; i < 32; ++i) {
+        a[i].im() = sharedMem[0][threadIdx.x][i];
+      }
     }
   }
-
-  // G. Write the results back to memory.
-  for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
-    complexAsFloat[batch][i][threadIdx.x].template as<Complex>() = a[i];
+  __syncthreads();
+  if (threadIdx.y == 1) {
+    for (int i = 0 ; i < 32 / 2 + 1; ++i) {
+      sharedMem[0][i][threadIdx.x] = a[i].im();
+    }
+    if (threadIdx.x < 32 / 2 + 1) {
+      for (int i = 0 ; i < 32; ++i) {
+        a[i].im() = sharedMem[0][threadIdx.x][i];
+      }
+    }
   }
 }
 
-template <int BatchDims, int FFTSize, int WarpsPerBlock, int BatchesPerWarp>
-__global__ void fbfft2D32(
-    DeviceTensor<float, BatchDims + 2> real,
-    DeviceTensor<float, BatchDims + 3> complexAsFloat,
-    const int padL,
-    const int padU) {
-  assert(BatchesPerWarp >= 1);
-  assert(WarpsPerBlock == blockDim.y);
-  assert(WarpsPerBlock == 1);
-  assert(gridDim.x == 1);
-  assert(gridDim.z == 1);
-  assert(blockDim.z == 1);
 
-  __shared__ float sharedMem[WarpsPerBlock][FFTSize][FFTSize + 1];
+// TODO: Partial specialization, constexpr
+template <>
+__device__ inline void inefficientTranspose<4, 16, false>(Complex* a) {
+  __shared__ float sharedMem[4][16 / 2 + 1][16 + 1];
 
-  const int batch = BatchesPerWarp * (
-    blockIdx.x * gridDim.y * blockDim.y +
-    blockIdx.y * blockDim.y +
-    threadIdx.y);
-
-  // Early exit if we would overflow
-  if (batch >= real.getSize(0)) {
-    return;
+  for (int i = 0 ; i < 16 / 2 + 1; ++i) {
+    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].re();
   }
-
-  // Early exit if we can only handle 1 batch, do it without Hermitian symmetry
-  if (batch + BatchesPerWarp - 1 >= real.getSize(0)) {
-    fbfft2D32NoHermitianDevice<BatchDims, FFTSize>(
-      real, complexAsFloat, sharedMem, batch, padL, padU);
-    return;
+  if (threadIdx.x < 16 / 2 + 1) {
+    for (int i = 0 ; i < 16; ++i) {
+      a[i].re() = sharedMem[threadIdx.y][threadIdx.x][i];
+    }
   }
-
-  // Perform 2 FFTs in place
-  Complex a[FFTSize];
-  // A. read data in
-  // TODO: read as float2
-  // TODO: f16 implementation
-  for (int i = 0 ; i < FFTSize; ++i) {
-    a[i] = inBounds(i, threadIdx.x, padU, padL, real) ?
-      Complex(real[batch][i - padU][threadIdx.x - padL].ldg(),
-              real[batch + 1][i - padU][threadIdx.x - padL].ldg()) :
-      Complex(0.0f);
+  __syncthreads();
+  for (int i = 0 ; i < 16 / 2 + 1; ++i) {
+    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].im();
   }
+  if (threadIdx.x < 16 / 2 + 1) {
+    for (int i = 0 ; i < 16; ++i) {
+      a[i].im() = sharedMem[threadIdx.y][threadIdx.x][i];
+    }
+  }
+}
 
+
+// TODO: Partial specialization, constexpr
+template <>
+__device__ inline void inefficientTranspose<16, 8, false>(Complex* a) {
+  __shared__ float sharedMem[16][8][8 + 1];
+
+  for (int i = 0 ; i < 8 / 2 + 1; ++i) {
+    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].re();
+  }
+  if (threadIdx.x < 8 / 2 + 1) {
+    for (int i = 0 ; i < 8; ++i) {
+      a[i].re() = sharedMem[threadIdx.y][threadIdx.x][i];
+    }
+  }
+  __syncthreads();
+  for (int i = 0 ; i < 8 / 2 + 1; ++i) {
+    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].im();
+  }
+  if (threadIdx.x < 8 / 2 + 1) {
+    for (int i = 0 ; i < 8; ++i) {
+      a[i].im() = sharedMem[threadIdx.y][threadIdx.x][i];
+    }
+  }
+}
+
+///////////////////// IFFT Transpose Specializations ///////////////////
+
+// TODO: Partial specialization, constexpr
+template <>
+__device__ inline void inefficientTranspose<2, 32, true>(Complex* a) {
+  __shared__ float sharedMem[1][32][32 + 1];
+
+  assert(blockDim.y == 2);
+
+  if (threadIdx.y == 0) {
+    for (int i = 0 ; i < 32; ++i) {
+      sharedMem[0][i][threadIdx.x] = a[i].re();
+    }
+    if (threadIdx.x < 32) {
+      for (int i = 0 ; i < 32; ++i) {
+        a[i].re() = sharedMem[0][threadIdx.x][i];
+      }
+    }
+  }
+  __syncthreads();
+  if (threadIdx.y == 1) {
+    for (int i = 0 ; i < 32; ++i) {
+      sharedMem[0][i][threadIdx.x] = a[i].re();
+    }
+    if (threadIdx.x < 32) {
+      for (int i = 0 ; i < 32; ++i) {
+        a[i].re() = sharedMem[0][threadIdx.x][i];
+      }
+    }
+  }
+  __syncthreads();
+  if (threadIdx.y == 0) {
+    for (int i = 0 ; i < 32; ++i) {
+      sharedMem[0][i][threadIdx.x] = a[i].im();
+    }
+    if (threadIdx.x < 32) {
+      for (int i = 0 ; i < 32; ++i) {
+        a[i].im() = sharedMem[0][threadIdx.x][i];
+      }
+    }
+  }
+  __syncthreads();
+  if (threadIdx.y == 1) {
+    for (int i = 0 ; i < 32; ++i) {
+      sharedMem[0][i][threadIdx.x] = a[i].im();
+    }
+    if (threadIdx.x < 32) {
+      for (int i = 0 ; i < 32; ++i) {
+        a[i].im() = sharedMem[0][threadIdx.x][i];
+      }
+    }
+  }
+}
+
+
+// TODO: Partial specialization, constexpr
+template <>
+  __device__ inline void inefficientTranspose<4, 16, true>(Complex* a) {
+  __shared__ float sharedMem[4][16][16 + 1];
+
+  for (int i = 0 ; i < 16; ++i) {
+    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].re();
+  }
+  for (int i = 0 ; i < 16; ++i) {
+    a[i].re() = sharedMem[threadIdx.y][threadIdx.x][i];
+  }
+  __syncthreads();
+  for (int i = 0 ; i < 16; ++i) {
+    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].im();
+  }
+  for (int i = 0 ; i < 16; ++i) {
+    a[i].im() = sharedMem[threadIdx.y][threadIdx.x][i];
+  }
+}
+
+// TODO: Partial specialization, constexpr
+template <>
+__device__ inline void inefficientTranspose<16, 8, true>(Complex* a) {
+  __shared__ float sharedMem[16][8][8 + 1];
+
+  for (int i = 0 ; i < 8; ++i) {
+    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].re();
+  }
+  for (int i = 0 ; i < 8; ++i) {
+    a[i].re() = sharedMem[threadIdx.y][threadIdx.x][i];
+  }
+  __syncthreads();
+  for (int i = 0 ; i < 8; ++i) {
+    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].im();
+  }
+  for (int i = 0 ; i < 8; ++i) {
+    a[i].im() = sharedMem[threadIdx.y][threadIdx.x][i];
+  }
+}
+
+
+//////////////////////////// FBFFT Generic ////////////////////////////////
+
+template <int FFTSize, int BatchesPerBlock, bool InverseFFT>
+__device__ __forceinline__ void fbfft2DCore(Complex* a) {
   // B. 2 real FFTs as one complex
-  FFT32(a);
+  fft2dCore<FFTSize>(a);
 
   // C. Bit reversal
   // Let the compiler unroll and optimize
@@ -408,53 +552,83 @@ __global__ void fbfft2D32(
     }
   }
 
-  Complex aa[FFTSize];
-  Complex bb[FFTSize];
-  // Make sure this is a power of 2
-  assert(! (FFTSize & (FFTSize - 1)));
-
-  // D. Extract 2 sub FFTs
-  aa[0] = Complex(a[0].re());
-  bb[0] = Complex(a[0].im());
-#pragma unroll
-  for (int i = 1; i < FFTSize; ++i) {
-    aa[i] =
-      Complex(0.5f * (a[i].re() + a[FFTSize - i].re()),
-              0.5f * (a[i].im() - a[FFTSize - i].im()));
-    bb[i] =
-      Complex(0.5f * ( a[i].im() + a[FFTSize - i].im()),
-              0.5f * (-a[i].re() + a[FFTSize - i].re()));
-  }
-
-  // E. Inefficiently transpose
-  inefficientTranspose<FFTSize> (aa, sharedMem);
-  inefficientTranspose<FFTSize> (bb, sharedMem);
+  // D. Inefficiently transpose
+  inefficientTranspose<BatchesPerBlock, FFTSize, InverseFFT> (a);
 
   // Use Hermitian symmetry
-  // TODO: 15/32 threads do nothing here, investigate using only 16 threads
-  // and have 1 thread do 2. iterations
-  if (threadIdx.x < FFTSize / 2 + 1) {
-    // F. FFT the rows
-    FFT32(aa);
-    FFT32(bb);
+  // Almost 1/2 threads do nothing here, we don't care we're memory bound
+  // because we're register bound.
+  if (InverseFFT || threadIdx.x < FFTSize / 2 + 1) {
+    // E. FFT the rows
+    fft2dCore<FFTSize>(a);
 
-    // G. Bit reversal
+    // F. Bit reversal
     // Let the compiler unroll and optimize
 #pragma unroll
     for (int i = 0; i < FFTSize; ++i) {
       if (i < detail::rev<FFTSize>(i)) {
         // Avoid double swap
-        swap(aa[i], aa[detail::rev<FFTSize>(i)]);
-        swap(bb[i], bb[detail::rev<FFTSize>(i)]);
+        swap(a[i], a[detail::rev<FFTSize>(i)]);
       }
     }
+  }
+}
 
-    // H. Write output in pieces, using symmetry
+// One single implementation is enough for all cases.
+// This implementation does not use the full Hermitian symmetry to reduce
+// flops (i.e. does not do 2 real FFTs as 1 complex or 1 2N real FFT as 1 N
+// complex FFT).
+// It is however not wasteful: only FFTSize / 2 + 1 outputs are needed and
+// computed along the y dimension.
+//
+// After further investigation, the name of the game is reduction of
+// registers. Savings flops by  Hermitian symmetry is essentially useless
+// since the GPU is completely memory bound.
+// What counts is the reduction of number of registers needed.
+// For this particular purpose, 1 2N real FFT as 1 N complex FFT is a better
+// scheme than 2 real FFTs as 1 complex.
+//
+// This is not implemented here.
+// Without any Hermitian symmetry, we achieve between 185 and 210 GB / s.
+template <int BatchDims, int FFTSize, int BatchesPerBlock>
+__global__ void fbfft2D(
+    DeviceTensor<float, BatchDims + 2> real,
+    DeviceTensor<float, BatchDims + 3> complexAsFloat,
+    const int padL,
+    const int padU) {
+  assert(BatchesPerBlock >= 1);
+  assert(gridDim.x == 1);
+  assert(gridDim.z == 1);
+  assert(blockDim.z == 1);
+
+  const int batch =
+    BatchesPerBlock * (blockIdx.x * gridDim.y + blockIdx.y ) + threadIdx.y;
+
+  // Early exit if we would overflow
+  if (batch >= real.getSize(0)) {
+    return;
+  }
+
+  // Perform 2 FFTs in place
+  Complex a[FFTSize];
+  // A. read data in
+  // TODO: read as float2
+  // TODO: f16 implementation
+  for (int i = 0 ; i < FFTSize; ++i) {
+    a[i] = inBounds(i, threadIdx.x, padU, padL, real) ?
+      Complex(real[batch][i - padU][threadIdx.x - padL].ldg()) :
+      Complex(0.0f, 0.0f);
+  }
+
+  // B. - F.
+  fbfft2DCore<FFTSize, BatchesPerBlock, false>(a);
+
+  // G. Write output in pieces, using symmetry
+  if (threadIdx.x < FFTSize / 2 + 1) {
     // 1. Write [0 , FFTSize / 2 + 1) ^ 2
 #pragma unroll
-    for (int i = 0 ; i < FFTSize / 2 + 1; ++i) { // [0 - 17)
-      complexAsFloat[batch][i][threadIdx.x].template as<Complex>() = aa[i];
-      complexAsFloat[batch + 1][i][threadIdx.x].template as<Complex>() = bb[i];
+    for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
+      complexAsFloat[batch][i][threadIdx.x].template as<Complex>() = a[i];
     }
 
     if (0 < threadIdx.x  && threadIdx.x < FFTSize / 2) {
@@ -462,74 +636,50 @@ __global__ void fbfft2D32(
         // 2. Orthogonal symmetry for i == 0
         int i = 0;
         complexAsFloat[batch][i][FFTSize - threadIdx.x].
-          template as<Complex>() = aa[i].conjugate();
-        complexAsFloat[batch + 1][i][FFTSize - threadIdx.x].
-          template as<Complex>() = bb[i].conjugate();
+          template as<Complex>() = a[i].conjugate();
       }
 
       // 3. Central symmetry for:
       // [FFTSize / 2 + 1, FFTSize) x [1, FFTSize / 2)
 #pragma unroll
-      for (int i = 1; i < FFTSize / 2; ++i) { // [0 - 17)
+      for (int i = 1; i < FFTSize / 2; ++i) {
         complexAsFloat[batch][i][FFTSize - threadIdx.x].
-          template as<Complex>() = aa[FFTSize - i].conjugate();
-        complexAsFloat[batch + 1][i][FFTSize - threadIdx.x].
-          template as<Complex>() = bb[FFTSize - i].conjugate();
+          template as<Complex>() = a[FFTSize - i].conjugate();
       }
 
       {
         // 4. Orthogonal symmetry for i == FFTSize / 2
         int i = FFTSize / 2;
         complexAsFloat[batch][i][FFTSize - threadIdx.x].
-          template as<Complex>() = aa[i].conjugate();
-        complexAsFloat[batch + 1][i][FFTSize - threadIdx.x].
-          template as<Complex>() = bb[i].conjugate();
+          template as<Complex>() = a[i].conjugate();
       }
     }
   }
-
-  // I. Donethanksmuch
 }
 
-
-// Baseline 32x32 version for a single batch at a time
-// Does not use Hermitian symmetry but is easy to understand
-template <int BatchDims, int FFTSize, int WarpsPerBlock>
-__global__ void fbifft2D32NoHermitian(
+template <int BatchDims, int FFTSize, int BatchesPerBlock>
+__global__ void fbifft2D(
     DeviceTensor<Complex, BatchDims + 2> complexSrc,
     DeviceTensor<float, BatchDims + 2> realDst,
     const int padL,
     const int padU) {
 
-  cuda_static_assert(BatchDims == 1);
-  cuda_static_assert(FFTSize == 32);
-
-  assert(gridDim.x == 1);
-  assert(gridDim.z == 1);
-  assert(blockDim.z == 1);
-
-  __shared__ float sharedMem[WarpsPerBlock][FFTSize][FFTSize + 1];
-
-  const int batch = (
-    blockIdx.x * gridDim.y * blockDim.y +
-      blockIdx.y * blockDim.y +
-      threadIdx.y);
+  const int batch =
+    BatchesPerBlock * (blockIdx.x * gridDim.y + blockIdx.y ) + threadIdx.y;
 
   // Early exit if we would overflow
-  if (batch >= complexSrc.getSize(0)) {
+  if (batch >= realDst.getSize(0)) {
     return;
   }
 
-  // Start with an inefficient implementation, no symmetry atm
+  // Perform 2 FFTs in place
   Complex a[FFTSize];
-
-  // A. Read in conjugate data to perform FFT as IFFT.
-  // Also unfolds the Hermitian symmetry setup
-  // 1. Read [0, FFTSize) x [0, FFTSize / 2 + 1)
+  // A. read data in
+  // TODO: read as float2
+  // TODO: f16 implementation
   for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
     a[i] = complexSrc[batch][i][threadIdx.x].data()->conjugate();
   }
-
   if (threadIdx.x == 0 || threadIdx.x == FFTSize / 2) {
     // 2. Orthogonal symmetry for first and middle columns along horizontal
     // plane FFTSize / 2 = 1
@@ -546,34 +696,10 @@ __global__ void fbifft2D32NoHermitian(
     }
   }
 
-  // B. FFT the cols
-  FFT32(a);
+  // B. - F.
+  fbfft2DCore<FFTSize, BatchesPerBlock, true>(a);
 
-  // C. Bit reverse
-#pragma unroll
-  for (int i = 0; i < 32; ++i) {
-    if (i < detail::rev<32>(i)) {
-      // Avoid double swap
-      swap(a[i], a[detail::rev<32>(i)]);
-    }
-  }
-
-  // D. Inefficiently transpose
-  inefficientTranspose<FFTSize> (a, sharedMem);
-
-  // E. FFT the rows
-  FFT32(a);
-
-  // F. Bit reverse
-#pragma unroll
-  for (int i = 0; i < 32; ++i) {
-    if (i < detail::rev<32>(i)) {
-      // Avoid double swap
-      swap(a[i], a[detail::rev<32>(i)]);
-    }
-  }
-
-  // G. Write the results back to memory.
+  // C. Write the results back to memory.
   // No need for conjugation as we know we have real results.
   for (int i = 0 ; i < FFTSize; ++i) {
     if (inBounds(i, threadIdx.x, padU, padL, realDst)) {
@@ -581,295 +707,5 @@ __global__ void fbifft2D32NoHermitian(
     }
   }
 }
-
-
-//////////////////////////// FBFFT16 ////////////////////////////////
-
-// Baseline 16x16 version for a single batch at a time
-// Does not use Hermitian symmetry but is easy to understand
-template <int BatchDims, int FFTSize>
-__device__ inline void fbfft2D16NoHermitianDevice(
-    DeviceTensor<float, BatchDims + 2> real,
-    DeviceTensor<float, BatchDims + 3> complexAsFloat,
-    // pass shared memory buffer or lose 2x perf
-    float (*sharedMem)[FFTSize][FFTSize + 1],
-    const int batch,
-    const int padL,
-    const int padU) {
-
-  // Start with an inefficient implementation, no symmetry atm
-  Complex a[FFTSize];
-
-  // A. Read in data
-  for (int i = 0 ; i < FFTSize; ++i) {
-    a[i] = inBounds(i, threadIdx.x, padU, padL, real) ?
-      Complex(real[batch][i - padU][threadIdx.x - padL].ldg()) :
-      Complex(0.0f, 0.0f);
-  }
-
-  // B. FFT the cols
-  FFT16(a);
-
-  // C. Bit reverse
-#pragma unroll
-  for (int i = 0; i < 16; ++i) {
-    if (i < detail::rev<16>(i)) {
-      // Avoid double swap
-      swap(a[i], a[detail::rev<16>(i)]);
-    }
-  }
-
-  // D. Inefficiently transpose
-  inefficientTranspose<FFTSize> (a, sharedMem);
-
-  // E. FFT the rows
-  FFT16(a);
-
-  // F. Bit reverse
-#pragma unroll
-  for (int i = 0; i < 16; ++i) {
-    if (i < detail::rev<16>(i)) {
-      // Avoid double swap
-      swap(a[i], a[detail::rev<16>(i)]);
-    }
-  }
-
-  // G. Write the results back to memory.
-  for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
-    complexAsFloat[batch][i][threadIdx.x].template as<Complex>() = a[i];
-  }
-
-}
-
-template <int BatchDims, int FFTSize, int WarpsPerBlock, int BatchesPerWarp>
-__global__ void fbfft2D16(
-    DeviceTensor<float, BatchDims + 2> real,
-    DeviceTensor<float, BatchDims + 3> complexAsFloat,
-    const int padL,
-    const int padU) {
-  assert(BatchesPerWarp == 2);
-  assert(WarpsPerBlock == blockDim.y);
-  assert(gridDim.x == 1);
-  assert(gridDim.z == 1);
-  assert(blockDim.z == 1);
-
-  __shared__ float sharedMem[WarpsPerBlock][FFTSize][FFTSize + 1];
-
-  const int batch = BatchesPerWarp * (
-    blockIdx.x * gridDim.y * blockDim.y +
-    blockIdx.y * blockDim.y +
-    threadIdx.y);
-
-  // Early exit if we would overflow
-  if (batch >= real.getSize(0)) {
-    return;
-  }
-
-  // Early exit if there are not enough batches
-  if (batch + BatchesPerWarp - 1 >= real.getSize(0)) {
-    fbfft2D16NoHermitianDevice<BatchDims, FFTSize>(
-      real, complexAsFloat, sharedMem, batch, padL, padU);
-    return;
-  }
-
-  // Perform 2 FFTs in place
-  Complex a[FFTSize];
-  // A. read data in
-  // TODO: read as float2
-  // TODO: f16 implementation
-  for (int i = 0 ; i < FFTSize; ++i) {
-    a[i] = inBounds(i, threadIdx.x, padU, padL, real) ?
-      Complex(real[batch][i - padU][threadIdx.x - padL].ldg(),
-              real[batch + 1][i - padU][threadIdx.x - padL].ldg()) :
-      Complex(0.0f);
-  }
-
-  // B. 2 real FFTs as one complex
-  FFT16(a);
-
-  // C. Bit reversal
-  // Let the compiler unroll and optimize
-#pragma unroll
-  for (int i = 0; i < FFTSize; ++i) {
-    if (i < detail::rev<FFTSize>(i)) {
-      // Avoid double swap
-      swap(a[i], a[detail::rev<FFTSize>(i)]);
-    }
-  }
-
-  Complex aa[FFTSize];
-  Complex bb[FFTSize];
-  // Make sure this is a power of 2
-  assert(! (FFTSize & (FFTSize - 1)));
-
-  // D. Extract 2 sub FFTs
-  aa[0] = Complex(a[0].re());
-  bb[0] = Complex(a[0].im());
-#pragma unroll
-  for (int i = 1; i < FFTSize; ++i) {
-    aa[i] =
-      Complex(0.5f * (a[i].re() + a[FFTSize - i].re()),
-              0.5f * (a[i].im() - a[FFTSize - i].im()));
-    bb[i] =
-      Complex(0.5f * ( a[i].im() + a[FFTSize - i].im()),
-              0.5f * (-a[i].re() + a[FFTSize - i].re()));
-  }
-
-  // E. Inefficiently transpose
-  inefficientTranspose<FFTSize> (aa, sharedMem);
-  inefficientTranspose<FFTSize> (bb, sharedMem);
-
-  // Use Hermitian symmetry
-  // TODO: 7/16 threads do nothing here, investigate using only 16 threads
-  // and have 1 thread do 2. iterations
-  if (threadIdx.x < FFTSize / 2 + 1) {
-    // F. FFT the rows
-    FFT16(aa);
-    FFT16(bb);
-
-    // G. Bit reversal
-    // Let the compiler unroll and optimize
-#pragma unroll
-    for (int i = 0; i < FFTSize; ++i) {
-      if (i < detail::rev<FFTSize>(i)) {
-        // Avoid double swap
-        swap(aa[i], aa[detail::rev<FFTSize>(i)]);
-        swap(bb[i], bb[detail::rev<FFTSize>(i)]);
-      }
-    }
-
-    // H. Write output in pieces, using symmetry
-    // 1. Write [0 , FFTSize / 2 + 1) ^ 2
-#pragma unroll
-    for (int i = 0 ; i < FFTSize / 2 + 1; ++i) { // [0 - 17)
-      complexAsFloat[batch][i][threadIdx.x].template as<Complex>() = aa[i];
-      complexAsFloat[batch + 1][i][threadIdx.x].template as<Complex>() = bb[i];
-    }
-
-    if (0 < threadIdx.x  && threadIdx.x < FFTSize / 2) {
-      {
-        // 2. Orthogonal symmetry for i == 0
-        int i = 0;
-        complexAsFloat[batch][i][FFTSize - threadIdx.x].
-          template as<Complex>() = aa[i].conjugate();
-        complexAsFloat[batch + 1][i][FFTSize - threadIdx.x].
-          template as<Complex>() = bb[i].conjugate();
-      }
-
-      // 3. Central symmetry for:
-      // [FFTSize / 2 + 1, FFTSize) x [1, FFTSize / 2)
-#pragma unroll
-      for (int i = 1; i < FFTSize / 2; ++i) { // [0 - 17)
-        complexAsFloat[batch][i][FFTSize - threadIdx.x].
-          template as<Complex>() = aa[FFTSize - i].conjugate();
-        complexAsFloat[batch + 1][i][FFTSize - threadIdx.x].
-          template as<Complex>() = bb[FFTSize - i].conjugate();
-      }
-
-      {
-        // 4. Orthogonal symmetry for i == FFTSize / 2
-        int i = FFTSize / 2;
-        complexAsFloat[batch][i][FFTSize - threadIdx.x].
-          template as<Complex>() = aa[i].conjugate();
-        complexAsFloat[batch + 1][i][FFTSize - threadIdx.x].
-          template as<Complex>() = bb[i].conjugate();
-      }
-    }
-  }
-
-  // I. Donethanksmuch
-}
-
-
-// Baseline 16x16 version for a single batch at a time
-// Does not use Hermitian symmetry but is easy to understand
-template <int BatchDims, int FFTSize, int WarpsPerBlock>
-__global__ void fbifft2D16NoHermitian(
-    DeviceTensor<Complex, BatchDims + 2> complexSrc,
-    DeviceTensor<float, BatchDims + 2> realDst,
-    const int padL,
-    const int padU) {
-
-  cuda_static_assert(BatchDims == 1);
-  cuda_static_assert(FFTSize == 16);
-
-  assert(gridDim.x == 1);
-  assert(gridDim.z == 1);
-  assert(blockDim.z == 1);
-
-  __shared__ float sharedMem[WarpsPerBlock][FFTSize][FFTSize + 1];
-
-  const int batch = (
-    blockIdx.x * gridDim.y * blockDim.y +
-      blockIdx.y * blockDim.y +
-      threadIdx.y);
-
-  // Early exit if we would overflow
-  if (batch >= complexSrc.getSize(0)) {
-    return;
-  }
-
-  // Start with an inefficient implementation, no symmetry atm
-  Complex a[FFTSize];
-
-  // A. Read in conjugate data to perform FFT as IFFT.
-  // Also unfolds the Hermitian symmetry setup
-  // 1. Read [0, FFTSize) x [0, FFTSize / 2 + 1)
-  for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
-    a[i] = complexSrc[batch][i][threadIdx.x].data()->conjugate();
-  }
-
-  if (threadIdx.x == 0 || threadIdx.x == FFTSize / 2) {
-    // 2. Orthogonal symmetry for first and middle columns along horizontal
-    // plane FFTSize / 2 = 1
-    for (int i = FFTSize / 2 + 1; i < FFTSize; ++i) {
-      a[i] = a[FFTSize - i].conjugate();
-    }
-  } else {
-    // 3. Central symmetry for:
-    //   [1, FFTSize / 2) x [FFTSize / 2 + 1, FFTSize) and
-    //   [FFTSize / 2 + 1, FFTSize) x [FFTSize / 2 + 1, FFTSize)
-    for (int i = FFTSize / 2 + 1; i < FFTSize; ++i) {
-      // conjugate().conjugate() == id
-      a[i] = complexSrc[batch][FFTSize - i][FFTSize - threadIdx.x];
-    }
-  }
-
-  // B. FFT the cols
-  FFT16(a);
-
-  // C. Bit reverse
-#pragma unroll
-  for (int i = 0; i < 16; ++i) {
-    if (i < detail::rev<16>(i)) {
-      // Avoid double swap
-      swap(a[i], a[detail::rev<16>(i)]);
-    }
-  }
-
-  // D. Inefficiently transpose
-  inefficientTranspose<FFTSize> (a, sharedMem);
-
-  // E. FFT the rows
-  FFT16(a);
-
-  // F. Bit reverse
-#pragma unroll
-  for (int i = 0; i < 16; ++i) {
-    if (i < detail::rev<16>(i)) {
-      // Avoid double swap
-      swap(a[i], a[detail::rev<16>(i)]);
-    }
-  }
-
-  // G. Write the results back to memory.
-  // No need for conjugation as we know we have real results.
-  for (int i = 0 ; i < FFTSize; ++i) {
-    if (inBounds(i, threadIdx.x, padU, padL, realDst)) {
-      realDst[batch][i - padU][threadIdx.x - padL] = a[i].re();
-    }
-  }
-}
-
 
 }}}}

@@ -474,67 +474,93 @@ FBFFTParameters::ErrorCode fbfft2D(
   }
 
 #define FFT_SIZE 32
-#define BATCHES_PER_WARP 2
-#define WARPS_PER_BLOCK 1
+#define BATCHES_PER_BLOCK 2
   if (complexAsFloat.getSize(BatchDims + 1) == FFT_SIZE) {
     CHECK_EQ(1, BatchDims);
     int maxBlocks =
       facebook::cuda::getCurrentDeviceProperties().maxGridSize[0];
     int blx = 1;
     int bly = 1;
-    if (real.getSize(0) / (WARPS_PER_BLOCK * BATCHES_PER_WARP) > maxBlocks) {
+    if (real.getSize(0) / (BATCHES_PER_BLOCK) > maxBlocks) {
       blx = maxBlocks;
       bly =
-        ceil(real.getSize(0), maxBlocks * WARPS_PER_BLOCK * BATCHES_PER_WARP);
+        ceil(real.getSize(0), maxBlocks * BATCHES_PER_BLOCK);
     } else {
-      bly = ceil(real.getSize(0), WARPS_PER_BLOCK * BATCHES_PER_WARP);
+      blx = ceil(real.getSize(0), BATCHES_PER_BLOCK);
     }
     CHECK_LE(1, blx);
     CHECK_LE(1, bly);
     CHECK_LE(blx, maxBlocks);
     CHECK_LE(bly, maxBlocks);
-    CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_WARP * WARPS_PER_BLOCK);
+    CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_BLOCK);
     dim3 blocks(blx, bly);
-    dim3 threads(FFT_SIZE, WARPS_PER_BLOCK);
-    detail::fbfft2D32<BatchDims, FFT_SIZE, WARPS_PER_BLOCK, BATCHES_PER_WARP>
+    dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
+    detail::fbfft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
       <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
     CHECK_EQ(cudaSuccess, cudaGetLastError());
     return FBFFTParameters::Success;
   }
-#undef BATCHES_PER_WARP
-#undef WARPS_PER_BLOCK
+#undef BATCHES_PER_BLOCK
 #undef FFT_SIZE
 
 #define FFT_SIZE 16
-#define BATCHES_PER_WARP 2
-#define WARPS_PER_BLOCK 2
+#define BATCHES_PER_BLOCK 4
   if (complexAsFloat.getSize(BatchDims + 1) == FFT_SIZE) {
     CHECK_EQ(1, BatchDims);
     int maxBlocks =
       facebook::cuda::getCurrentDeviceProperties().maxGridSize[0];
     int blx = 1;
     int bly = 1;
-    if (real.getSize(0) / (WARPS_PER_BLOCK * BATCHES_PER_WARP) > maxBlocks) {
+    if (real.getSize(0) / (BATCHES_PER_BLOCK) > maxBlocks) {
       blx = maxBlocks;
       bly =
-        ceil(real.getSize(0), maxBlocks * WARPS_PER_BLOCK * BATCHES_PER_WARP);
+        ceil(real.getSize(0), maxBlocks * BATCHES_PER_BLOCK);
     } else {
-      bly = ceil(real.getSize(0), WARPS_PER_BLOCK * BATCHES_PER_WARP);
+      blx = ceil(real.getSize(0), BATCHES_PER_BLOCK);
     }
     CHECK_LE(1, blx);
     CHECK_LE(1, bly);
     CHECK_LE(blx, maxBlocks);
     CHECK_LE(bly, maxBlocks);
-    CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_WARP * WARPS_PER_BLOCK);
+    CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_BLOCK);
     dim3 blocks(blx, bly);
-    dim3 threads(FFT_SIZE, WARPS_PER_BLOCK);
-    detail::fbfft2D16<BatchDims, FFT_SIZE, WARPS_PER_BLOCK, BATCHES_PER_WARP>
+    dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
+    detail::fbfft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
       <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
     CHECK_EQ(cudaSuccess, cudaGetLastError());
     return FBFFTParameters::Success;
   }
-#undef BATCHES_PER_WARP
-#undef WARPS_PER_BLOCK
+#undef BATCHES_PER_BLOCK
+#undef FFT_SIZE
+
+#define FFT_SIZE 8
+#define BATCHES_PER_BLOCK 16
+  if (complexAsFloat.getSize(BatchDims + 1) == FFT_SIZE) {
+    CHECK_EQ(1, BatchDims);
+    int maxBlocks =
+      facebook::cuda::getCurrentDeviceProperties().maxGridSize[0];
+    int blx = 1;
+    int bly = 1;
+    if (real.getSize(0) / (BATCHES_PER_BLOCK) > maxBlocks) {
+      blx = maxBlocks;
+      bly =
+        ceil(real.getSize(0), maxBlocks * BATCHES_PER_BLOCK);
+    } else {
+      blx = ceil(real.getSize(0), BATCHES_PER_BLOCK);
+    }
+    CHECK_LE(1, blx);
+    CHECK_LE(1, bly);
+    CHECK_LE(blx, maxBlocks);
+    CHECK_LE(bly, maxBlocks);
+    CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_BLOCK);
+    dim3 blocks(blx, bly);
+    dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
+    detail::fbfft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
+      <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
+    CHECK_EQ(cudaSuccess, cudaGetLastError());
+    return FBFFTParameters::Success;
+  }
+#undef BATCHES_PER_BLOCK
 #undef FFT_SIZE
 
 #define SELECT_FBFFT_2D_DIF_WARP_SINGLE(                                \
