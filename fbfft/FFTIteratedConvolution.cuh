@@ -412,7 +412,8 @@ bool FFTIteratedConvolution(
     }                                                                   \
 
     // Tune which sizes to use in practice
-    INSTANTIATE_ACC_GRAD_PARAMETERS_ITERATED(4);
+    // INSTANTIATE_ACC_GRAD_PARAMETERS_ITERATED(4); Bug here solved in the
+    // subsequent diff
     INSTANTIATE_ACC_GRAD_PARAMETERS_ITERATED(1);
   }
 
