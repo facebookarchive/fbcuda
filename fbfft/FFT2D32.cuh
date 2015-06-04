@@ -536,10 +536,9 @@ __device__ inline void inefficientTranspose<16, 8, true>(Complex* a) {
 
 
 //////////////////////////// FBFFT Generic ////////////////////////////////
-
 template <int FFTSize, int BatchesPerBlock, bool InverseFFT>
-__device__ __forceinline__ void fbfft2DCore(Complex* a) {
-  // B. 2 real FFTs as one complex
+__device__ inline void fbfft2DCore(Complex* a) {
+  // B. real FFTs as complex
   fft2dCore<FFTSize>(a);
 
   // C. Bit reversal
@@ -572,6 +571,57 @@ __device__ __forceinline__ void fbfft2DCore(Complex* a) {
       }
     }
   }
+}
+
+//
+// This function assumes 'FFTSize' threadIdx.x threads each independently
+// perform a 1-D FFT of size 'FFTSize', transpose and perform another
+// 1-D FFT of size 'FFTSize'.
+//
+// Multiple threadIdx.y threads may independently perform different FFTs in
+// which case, sharedMem must be able to fit them all at the same time (i.e.
+// sharedMem[blockIdx.y][FFTSize][FFTSize + 1]).
+//
+// This is used in iterated convolutions which do not yet support
+// Hermitian symmetry.
+template <int FFTSize, bool InverseFFT>
+__device__ inline void fbfft2DCore(
+    Complex* a,
+    // pass shared memory buffer or lose 2x perf
+    float (*sharedMem)[FFTSize][FFTSize + 1]) {
+  // B. real FFTs as complex
+  fft2dCore<FFTSize>(a);
+
+  // C. Bit reversal
+  // Let the compiler unroll and optimize
+#pragma unroll
+  for (int i = 0; i < FFTSize; ++i) {
+    if (i < detail::rev<FFTSize>(i)) {
+      // Avoid double swap
+      swap(a[i], a[detail::rev<FFTSize>(i)]);
+    }
+  }
+
+  // D. Inefficiently transpose
+  inefficientTranspose<FFTSize> (a, sharedMem);
+
+  // Use Hermitian symmetry
+  // Almost 1/2 threads do nothing here, we don't care we're memory bound
+  // because we're register bound.
+  //  if (InverseFFT || threadIdx.x < FFTSize / 2 + 1) {
+    // E. FFT the rows
+    fft2dCore<FFTSize>(a);
+
+    // F. Bit reversal
+    // Let the compiler unroll and optimize
+#pragma unroll
+    for (int i = 0; i < FFTSize; ++i) {
+      if (i < detail::rev<FFTSize>(i)) {
+        // Avoid double swap
+        swap(a[i], a[detail::rev<FFTSize>(i)]);
+      }
+    }
+  //  }
 }
 
 // One single implementation is enough for all cases.

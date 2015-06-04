@@ -22,21 +22,25 @@ __device__ __host__ T numHermitian(T commonCols) {
 
 namespace detail {
 
-__device__ __forceinline__ bool inBounds(
+__device__ inline bool inBounds(
   int y, int x, int padU, int padL, const DeviceTensor<float, 3>& t) {
+  // Rely on unsigned integer arithmetic to test both 0 <= and < t.getSize()
+  // in one shot.
   return ((unsigned)(y - padU) < (unsigned)(t.getSize(1)) &&
           (unsigned)(x - padL) < (unsigned)(t.getSize(2)));
 }
 
 __device__ __forceinline__ bool inBounds(
   int y, int x, int padU, int padL, const DeviceTensor<float, 4>& t) {
+  // Rely on unsigned integer arithmetic to test both 0 <= and < t.getSize()
+  // in one shot.
   return ((unsigned)(y - padU) < (unsigned)(t.getSize(2)) &&
           (unsigned)(x - padL) < (unsigned)(t.getSize(3)));
 }
 
 #define PI 0x1.921FB6p+1f
 
-__device__ __forceinline__
+__device__ inline
 unsigned int reverse(unsigned int x, unsigned int nbits) {
   return __brev(x) >> (WARP_SIZE - nbits);
 }
@@ -48,7 +52,7 @@ unsigned int reverse(unsigned int x, unsigned int nbits) {
 // This has no effect if FFTSize >= WARP_SIZE or FFTPerWarp == 1.
 // This is for the cases 2, 4, 8 and 16 and buys us additional perf.
 template <int FFTSize>
-__device__ __forceinline__ int adjustedThreadIdxX() {
+__device__ inline int adjustedThreadIdxX() {
   if (FFTSize < WARP_SIZE) {
     return (threadIdx.x & (FFTSize - 1));
   } else {
@@ -57,7 +61,7 @@ __device__ __forceinline__ int adjustedThreadIdxX() {
 }
 
 template <int FFTSize>
-__device__ __forceinline__ int adjustedThreadIdxY() {
+__device__ inline int adjustedThreadIdxY() {
   if (FFTSize < WARP_SIZE) {
     return (threadIdx.y & (FFTSize - 1));
   } else {
@@ -72,7 +76,7 @@ __device__ __forceinline__ int adjustedThreadIdxY() {
 //   - exactly FFTPerWarp FFTs are processed by one warp
 // These 3 subdivisions interact to compute the actual batch size.
 template <int FFTSize, int FFTPerWarp>
-__device__ __forceinline__ int adjustedBatch() {
+__device__ inline int adjustedBatch() {
   if (FFTSize < WARP_SIZE) {
     int LogFFTSize = getMSB<FFTSize>();
     int LogFFTPerWarp = getMSB<FFTPerWarp>();
@@ -92,7 +96,7 @@ __device__ __forceinline__ int adjustedBatch() {
 // These 3 subdivisions interact to compute the actual batch size.
 // In the R2C case, we additionally compute 2 real FFTs as a single complex FFT
 template <int FFTSize, int FFTPerWarp, bool ForwardFFT>
-__device__ __forceinline__ int adjustedBatchR2C() {
+__device__ inline int adjustedBatchR2C() {
   if (FFTSize < WARP_SIZE) {
     int LogFFTSize = getMSB<FFTSize>();
     int LogFFTPerWarp = getMSB<FFTPerWarp>();
@@ -109,10 +113,10 @@ struct FFT1DCoeffs {
   enum {
     ColumnsPerWarp = (FFTSize + WARP_SIZE - 1) / WARP_SIZE
   };
-  __device__ __forceinline__ Complex& operator[](int i) {
+  __device__ inline Complex& operator[](int i) {
     return coeff[i];
   }
-  __device__ __forceinline__ Complex operator[](int i) const {
+  __device__ inline Complex operator[](int i) const {
     return coeff[i];
   }
 
@@ -120,7 +124,7 @@ struct FFT1DCoeffs {
 };
 
 
-__device__ __forceinline__ Complex ldg(const Complex* p) {
+__device__ inline Complex ldg(const Complex* p) {
   return Complex(__ldg(&(p->re())),
                  __ldg(&(p->im()))
                 );
@@ -151,7 +155,7 @@ struct FFT1DRoots : public FFT1DCoeffs<FFTSize> {
   // Twiddles are more efficiently computed for 1D FFTs and more efficiently
   // loaded from constant memory for 2D FFTs.
   template <bool ForwardFFT>
-  __device__ __forceinline__ void twiddles() {
+  __device__ inline void twiddles() {
     // These are the sizes empirically determined to be more SFU bound
     if ((ForwardFFT && (FFTSize == 16 || FFTSize == 32)) ||
         (!ForwardFFT && (FFTSize == 128))) {
@@ -211,7 +215,7 @@ for (int index = 0; index < ceil((int)this->ColumnsPerWarp, 2); ++index) {
   // However it performs worse in all the other cases, still 16x16 and 32x32
   //   are important enough cases that we want the absolute best perf for them.
   template <bool ForwardFFT>
-  __device__ __forceinline__ void twiddlesFromMemory() {
+  __device__ inline void twiddlesFromMemory() {
 #pragma unroll
     for (int index = 0; index < ceil((int)this->ColumnsPerWarp, 2); ++index) {
       int x = threadIdx.x % FFTSize + index * WARP_SIZE;
@@ -228,14 +232,14 @@ struct FFT1DBitReversal {
   enum {
     ColumnsPerWarp = (FFTSize + WARP_SIZE - 1) / WARP_SIZE
   };
-  __device__ __forceinline__ int& operator[](int i) {
+  __device__ inline int& operator[](int i) {
     return bitReversed[i];
   }
-  __device__ __forceinline__ int operator[](int i) const {
+  __device__ inline int operator[](int i) const {
     return bitReversed[i];
   }
 
-  __device__ __forceinline__ void computeBitReversal(const int index) {
+  __device__ inline void computeBitReversal(const int index) {
     int LogFFTSize = cuda::getMSB<FFTSize>();
     int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
     bitReversed[index] = reverse(x, LogFFTSize);
@@ -252,7 +256,7 @@ struct FFT1DBitReversal {
 // A: Just use shared memory for the bit reversal portion, it will only
 // consume 2 * FFTSize floats per block.
 template <int FFTSize, int FFTPerWarp>
- __device__ __forceinline__
+ __device__ inline
 void bitReverse1DWarp(FFT1DCoeffs<FFTSize>& coeffs,
                       const FFT1DBitReversal<FFTSize>& bits,
                       const int index) {
@@ -291,7 +295,7 @@ void bitReverse1DWarp(FFT1DCoeffs<FFTSize>& coeffs,
 // r1[k] <- concat(r1, r2) [2k] for k \in [0 .. WARP_SIZE - 1]
 // r2 <- r1
 //
-__device__ __forceinline__
+__device__ inline
 void selectEvenWarpDistributed(Complex& r1, Complex& r2) {
   // E.g. stating from:
   //   r1[w^0, w^1, ... w^31] and r2[w^32, w^33, ...w^63]
@@ -321,12 +325,12 @@ void selectEvenWarpDistributed(Complex& r1, Complex& r2) {
 }
 
 template <int FFTSize, bool ForwardFFT>
-__device__ __forceinline__ void load1D(const DeviceTensor<float, 2>& real,
-                                       const DeviceTensor<float, 3>& complex,
-                                       FFT1DCoeffs<FFTSize>& coeffs,
-                                       const int batch,
-                                       const int index,
-                                       const int padL) {
+__device__ inline void load1D(const DeviceTensor<float, 2>& real,
+                              const DeviceTensor<float, 3>& complex,
+                              FFT1DCoeffs<FFTSize>& coeffs,
+                              const int batch,
+                              const int index,
+                              const int padL) {
   int LogFFTSize = getMSB<FFTSize>();
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
@@ -352,12 +356,12 @@ __device__ __forceinline__ void load1D(const DeviceTensor<float, 2>& real,
 }
 
 template <int FFTSize, bool ForwardFFT, bool EvenDivideBatches>
-__device__ __forceinline__ void load1DR2C(const DeviceTensor<float, 2>& real,
-                                          const DeviceTensor<float, 3>& complex,
-                                          FFT1DCoeffs<FFTSize>& coeffs,
-                                          const int batch,
-                                          const int index,
-                                          const int padL) {
+__device__ inline void load1DR2C(const DeviceTensor<float, 2>& real,
+                                 const DeviceTensor<float, 3>& complex,
+                                 FFT1DCoeffs<FFTSize>& coeffs,
+                                 const int batch,
+                                 const int index,
+                                 const int padL) {
   int LogFFTSize = getMSB<FFTSize>();
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
@@ -398,12 +402,12 @@ __device__ __forceinline__ void load1DR2C(const DeviceTensor<float, 2>& real,
 }
 
 template <int FFTSize, bool ForwardFFT>
-__device__ __forceinline__ void store1D(DeviceTensor<float, 2>& real,
-                                        DeviceTensor<float, 3>& complex,
-                                        const FFT1DCoeffs<FFTSize>& coeffs,
-                                        const int batch,
-                                        const int index,
-                                        const int padL) {
+__device__ inline void store1D(DeviceTensor<float, 2>& real,
+                               DeviceTensor<float, 3>& complex,
+                               const FFT1DCoeffs<FFTSize>& coeffs,
+                               const int batch,
+                               const int index,
+                               const int padL) {
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
   if (ForwardFFT && x < complex.getSize(1)) {
@@ -416,7 +420,7 @@ __device__ __forceinline__ void store1D(DeviceTensor<float, 2>& real,
 }
 
 template <int FFTSize>
-__device__ __forceinline__ const Complex HermitianModuloCoefficient(
+__device__ inline const Complex HermitianModuloCoefficient(
     const FFT1DCoeffs<FFTSize>& coeffs, int index) {
   assert(FFTSize > 32);
   // This monstrosisty below is unfortunately necessary to recover the
@@ -432,12 +436,12 @@ __device__ __forceinline__ const Complex HermitianModuloCoefficient(
 }
 
 template <int FFTSize, bool ForwardFFT, bool EvenDivideBatches>
-__device__ __forceinline__ void store1DR2C(DeviceTensor<float, 2>& real,
-                                           DeviceTensor<float, 3>& complex,
-                                           const FFT1DCoeffs<FFTSize>& coeffs,
-                                           const int batch,
-                                           const int index,
-                                           const int padL) {
+__device__ inline void store1DR2C(DeviceTensor<float, 2>& real,
+                                  DeviceTensor<float, 3>& complex,
+                                  const FFT1DCoeffs<FFTSize>& coeffs,
+                                  const int batch,
+                                  const int index,
+                                  const int padL) {
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
 
@@ -477,7 +481,7 @@ __device__ __forceinline__ void store1DR2C(DeviceTensor<float, 2>& real,
 }
 
 template <int FFTSize>
-__device__ __forceinline__
+__device__ inline
 void decimateInFrequency1DWarp(Complex& coeff, Complex& root) {
   // Cannot be static due to upstream mix of function calls
   assert(FFTSize <= WARP_SIZE);
@@ -522,19 +526,19 @@ void decimateInFrequency1DWarp(Complex& coeff, Complex& root) {
 
 template <int FFTSize>
 struct TwiddleRebalancer {
-  static __device__ __forceinline__
+  static __device__ inline
   void rebalance(FFT1DRoots<FFTSize>&, int);
 };
 
 template <> struct TwiddleRebalancer<64> {
-  static __device__ __forceinline__
+  static __device__ inline
   void rebalance(FFT1DRoots<64>& roots, int) {
     selectEvenWarpDistributed(roots[0], roots[1]);
   }
 };
 
 template <> struct TwiddleRebalancer<128> {
-  static __device__ __forceinline__
+  static __device__ inline
   void rebalance(FFT1DRoots<128>& roots, int logStep) {
     if (logStep == 1) {
       selectEvenWarpDistributed(roots[0], roots[1]);
@@ -551,7 +555,7 @@ template <> struct TwiddleRebalancer<128> {
 };
 
 template <> struct TwiddleRebalancer<256> {
-  static __device__ __forceinline__
+  static __device__ inline
   void rebalance(FFT1DRoots<256>& roots, int logStep) {
     if (logStep == 1) {
       selectEvenWarpDistributed(roots[0], roots[1]);
@@ -640,7 +644,7 @@ template <> struct TwiddleRebalancer<256> {
 // fully unrolled, cross-register twiddles.
 //
 template <int FFTSize, int BatchUnroll, int RowsPerWarp, int RowBegin, int RowEnd>
-__device__ __forceinline__
+__device__ inline
 void decimateInFrequency1D(FFT1DCoeffs<FFTSize> coeffsArray[RowsPerWarp],
                            FFT1DRoots<FFTSize>& roots,
                            const int batch) {
@@ -734,7 +738,7 @@ void decimateInFrequency1D(FFT1DCoeffs<FFTSize> coeffsArray[RowsPerWarp],
 }
 
 template <int FFTSize, int BatchUnroll, bool ForwardFFT, bool EvenDivideBatches>
-__device__ __forceinline__
+__device__ inline
 void decimateInFrequency1D(DeviceTensor<float, 2>& real,
                            DeviceTensor<float, 3>& complex,
                            FFT1DCoeffs<FFTSize> (&coeffsArray)[1],
@@ -866,7 +870,7 @@ __global__ void decimateInFrequency1DKernel(DeviceTensor<float, 2> real,
 //  - synchronized at each step of the loop
 //  - synchronized on exit
 template <int FFTSize, int SMemRows, int RowsPerWarp>
-__device__ __forceinline__ void transpose2D(
+__device__ inline void transpose2D(
       FFT1DCoeffs<FFTSize>& coeffs,
       Complex(*buffer)[SMemRows][SMemRows + 1]) {
 #pragma unroll
@@ -891,7 +895,7 @@ __device__ __forceinline__ void transpose2D(
 //  - synchronized at each step of the loop
 //  - synchronized on exit
 template <int FFTSize, int SMemRows, int RowsPerWarp, int FFTPerWarp>
-__device__ __forceinline__ void transpose2DMultiple(
+__device__ inline void transpose2DMultiple(
       FFT1DCoeffs<FFTSize>& coeffs,
       Complex(*buffer)[SMemRows][SMemRows + 1]) {
   const int LogFFTSize = getMSB<FFTSize>();

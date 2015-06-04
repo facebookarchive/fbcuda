@@ -7,6 +7,7 @@
 #include "cuda/CudaUtils.cuh"
 #include "cuda/DeviceTensor.cuh"
 #include "cuda/fbfft/FBFFTCommon.cuh"
+#include "cuda/fbfft/FBFFTParameters.h"
 #include "cuda/fbfft/FFT2D32.cuh"
 #include "cuda/util/CachedDeviceProperties.h"
 

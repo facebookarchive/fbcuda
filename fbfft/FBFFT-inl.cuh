@@ -1,10 +1,13 @@
 // Copyright 2004-present Facebook. All Rights Reserved.
 
+#pragma once
+
 #include "cuda/Complex.cuh"
 #include "cuda/ComputeCapabilities.cuh"
 #include "cuda/CudaUtils.cuh"
 #include "cuda/DeviceTensor.cuh"
 #include "cuda/fbfft/FBFFTCommon.cuh"
+#include "cuda/fbfft/FBFFTParameters.h"
 
 #include <cuda_runtime.h>
 #include <glog/logging.h>
