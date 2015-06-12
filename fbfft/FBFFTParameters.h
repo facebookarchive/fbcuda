@@ -9,7 +9,8 @@ class FBFFTParameters {
   enum ErrorCode {
     Success = 0,
     UnsupportedSize = 1,
-    UnsupportedDimension = 2
+    UnsupportedDimension = 2,
+    CudaError = 3
   };
 
   FBFFTParameters() :

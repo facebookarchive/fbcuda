@@ -551,6 +551,9 @@ FBFFTParameters::ErrorCode fbifft2D(
     detail::decimateInFrequencyInverse2DKernel##FFT_SIZE<               \
       FFT_SIZE,  ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE>               \
       <<<blocks, threads, 0, s>>>(srcComplexAsFloat, dstComplexAsFloat);\
+      if (cudaSuccess != cudaPeekAtLastError()) {                       \
+        return FBFFTParameters::CudaError;                              \
+      }                                                                 \
       return FBFFTParameters::Success;                                  \
   }
 
@@ -612,7 +615,9 @@ FBFFTParameters::ErrorCode fbifft2D(
     dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
     detail::fbifft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
       <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);
-    CHECK_EQ(cudaSuccess, cudaGetLastError());
+    if (cudaSuccess != cudaPeekAtLastError()) {
+      return FBFFTParameters::CudaError;
+    }
     return FBFFTParameters::Success;
   }
 #undef BATCHES_PER_BLOCK
@@ -641,7 +646,9 @@ FBFFTParameters::ErrorCode fbifft2D(
     dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
     detail::fbifft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
       <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);
-    CHECK_EQ(cudaSuccess, cudaGetLastError());
+    if (cudaSuccess != cudaPeekAtLastError()) {
+      return FBFFTParameters::CudaError;
+    }
     return FBFFTParameters::Success;
   }
 #undef BATCHES_PER_BLOCK
@@ -670,7 +677,9 @@ FBFFTParameters::ErrorCode fbifft2D(
     dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
     detail::fbifft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
       <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);
-    CHECK_EQ(cudaSuccess, cudaGetLastError());
+    if (cudaSuccess != cudaPeekAtLastError()) {
+      return FBFFTParameters::CudaError;
+    }
     return FBFFTParameters::Success;
   }
 #undef BATCHES_PER_BLOCK
@@ -699,6 +708,9 @@ FBFFTParameters::ErrorCode fbifft2D(
         FFT_SIZE, 1, BIT_REVERSE>                                       \
         <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);   \
     }                                                                   \
+    if (cudaSuccess != cudaPeekAtLastError()) {                         \
+      return FBFFTParameters::CudaError;                                \
+    }                                                                   \
     return FBFFTParameters::Success;                                    \
   }
 
@@ -710,6 +722,9 @@ FBFFTParameters::ErrorCode fbifft2D(
     detail::decimateInFrequencyInverse2DKernel##FFT_SIZE<               \
       FFT_SIZE,  ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE>               \
       <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);     \
+      if (cudaSuccess != cudaPeekAtLastError()) {                       \
+      return FBFFTParameters::CudaError;                                \
+    }                                                                   \
     return FBFFTParameters::Success;                                    \
   }
 
