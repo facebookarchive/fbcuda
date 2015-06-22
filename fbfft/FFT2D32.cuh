@@ -342,7 +342,7 @@ template <>
 __device__ inline void inefficientTranspose<2, 32, false>(Complex* a) {
   __shared__ float sharedMem[1][32 / 2 + 1][32 + 1];
 
-  assert(blockDim.y == 2);
+  assert(blockDim.y == 2); // BatchesPerBlock 2
 
   if (threadIdx.y == 0) {
     for (int i = 0 ; i < 32 / 2 + 1; ++i) {
@@ -446,7 +446,7 @@ template <>
 __device__ inline void inefficientTranspose<2, 32, true>(Complex* a) {
   __shared__ float sharedMem[1][32][32 + 1];
 
-  assert(blockDim.y == 2);
+  assert(blockDim.y == 2); // BatchesPerBlock 2
 
   if (threadIdx.y == 0) {
     for (int i = 0 ; i < 32; ++i) {
@@ -647,7 +647,6 @@ __global__ void fbfft2D(
     const int padL,
     const int padU) {
   assert(BatchesPerBlock >= 1);
-  assert(gridDim.x == 1);
   assert(gridDim.z == 1);
   assert(blockDim.z == 1);
 
