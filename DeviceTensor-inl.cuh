@@ -481,21 +481,14 @@ DeviceTensor<T, Dim, IndexT, PtrTraits>::view() {
 template <typename T, int Dim,
           typename IndexT, template <typename U> class PtrTraits>
 void
-DeviceTensor<T, Dim, IndexT, PtrTraits>::fillAsync(T val, cudaStream_t stream) {
+DeviceTensor<T, Dim, IndexT, PtrTraits>::zero(cudaStream_t stream) {
 #ifndef __CUDA_ARCH__
   if (!isContiguous()) {
     throw std::invalid_argument("fillAsync only works on contiguous data");
   }
 #endif
 
-  union {
-    T vT;
-    int vInt;
-  } u;
-
-  u.vT = val;
-
-  cudaMemsetAsync(data(), u.vInt, numElements() * sizeof(T), stream);
+  cudaMemsetAsync(data(), 0, numElements() * sizeof(T), stream);
 }
 
 } } // namespace

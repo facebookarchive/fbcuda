@@ -128,12 +128,14 @@ class DeviceTensor {
   const detail::DeviceSubTensor<TensorType, Dim - 1, PtrTraits>
     operator[](IndexT) const;
 
-  /// Returns the size of a given dimension, `[0, Dim - 1]`. No bounds checking.
+  /// Returns the size of a given dimension, `[0, Dim - 1]`. No bounds
+  /// checking.
   __host__ __device__ __forceinline__ int getSize(int i) const {
     return size_[i];
   }
 
-  /// Returns the size of a given dimension, `[0, Dim - 1]`. No bounds checking.
+  /// Returns the stride of a given dimension, `[0, Dim - 1]`. No bounds
+  /// checking.
   __host__ __device__ __forceinline__ int getStride(int i) const {
     return stride_[i];
   }
@@ -221,8 +223,9 @@ class DeviceTensor {
   __host__ __device__ DeviceTensor<T, SubDim, IndexT, PtrTraits>
   view();
 
-  /// Fill a value into our data asynchronously.
-  void fillAsync(T val, cudaStream_t stream = 0);
+  /// Zeroes out the tensor asynchronously. Asserts if the contents
+  /// in question are not contiguous.
+  void zero(cudaStream_t stream = 0);
 
  private:
   /// Raw pointer to where the tensor data begins
