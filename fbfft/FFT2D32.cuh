@@ -121,17 +121,18 @@ template<> __device__ inline int bitReversal<32>(int i)
   }
 }
 
+template<typename T>
+__device__ inline void swap(T& a, T& b) {
+  T t = a;
+  a = b;
+  b = t;
+}
+
 __device__ inline void FFT2(Complex &a, Complex &b)
 {
   float t;
   t = a.re(); a.re() += b.re(); b.re() = t - b.re();
   t = a.im(); a.im() += b.im(); b.im() = t - b.im();
-}
-
-__device__ inline void swap(Complex& a, Complex& b) {
-  Complex t = a;
-  a = b;
-  b = t;
 }
 
 template<int FFTSize>
@@ -140,17 +141,19 @@ __device__ __forceinline__ void swapHorizontal(Complex& a) {
   a = shfl(a, reverse(threadIdx.x, LogFFTSize), FFTSize);
 }
 
+template<bool forward>
 __device__ inline void FFT4(
     Complex &a0, Complex &a1, Complex &a2, Complex &a3) {
   FFT2(a0, a2);
   FFT2(a1, a3);
 
-  a3 = a3 * FBFFT32_CEXPF_G.conjugate(); // e(2pi / 32 . (-2 . 8))
+  a3 = a3 * ((forward) ? cexp<4>(2).conjugate() : cexp<4>(2));
 
   FFT2(a0, a1);
   FFT2(a2, a3);
 }
 
+template<bool forward>
 __device__ inline void FFT8(Complex* a)
 {
 #pragma unroll
@@ -158,14 +161,15 @@ __device__ inline void FFT8(Complex* a)
     FFT2(a[i], a[4 + i]);
   }
 
-  a[5] *= FBFFT32_CEXPF_8.conjugate(); // e(-2pi / 8 .1)
-  a[6] *= FBFFT32_CEXPF_G.conjugate(); // e(-2pi / 8 . 2)
-  a[7] *= FBFFT32_CEXPF_O.conjugate(); // e(-2pi / 8 . 3)
+  a[5] *= ((forward) ? cexp<8>(2).conjugate() : cexp<8>(2));
+  a[6] *= ((forward) ? cexp<8>(4).conjugate() : cexp<8>(4));
+  a[7] *= ((forward) ? cexp<8>(6).conjugate() : cexp<8>(6));
 
-  FFT4(a[ 0], a[ 1], a[ 2], a[ 3]);
-  FFT4(a[ 4], a[ 5], a[ 6], a[ 7]);
+  FFT4<forward>(a[ 0], a[ 1], a[ 2], a[ 3]);
+  FFT4<forward>(a[ 4], a[ 5], a[ 6], a[ 7]);
 }
 
+template<bool forward>
 __device__ inline void FFT16(Complex* a)
 {
 #pragma unroll
@@ -173,19 +177,19 @@ __device__ inline void FFT16(Complex* a)
     FFT2(a[i], a[8 + i]);
   }
 
-  a[9]  *= FBFFT32_CEXPF_4.conjugate(); // e(-2pi / 16 . 1)
-  a[10] *= FBFFT32_CEXPF_8.conjugate(); // e(-2pi / 16 . 2)
-  a[11] *= FBFFT32_CEXPF_C.conjugate(); // e(-2pi / 16 . 3)
-  a[12] *= FBFFT32_CEXPF_G.conjugate(); // e(-2pi / 16 . 4)
-  a[13] *= FBFFT32_CEXPF_K.conjugate(); // e(-2pi / 16 . 5)
-  a[14] *= FBFFT32_CEXPF_O.conjugate(); // e(-2pi / 16 . 6)
-  a[15] *= FBFFT32_CEXPF_S.conjugate(); // e(-2pi / 16 . 7)
+  a[9]  *= ((forward) ? cexp<16>(2).conjugate() : cexp<16>(2));
+  a[10] *= ((forward) ? cexp<16>(4).conjugate() : cexp<16>(4));
+  a[11] *= ((forward) ? cexp<16>(6).conjugate() : cexp<16>(6));
+  a[12] *= ((forward) ? cexp<16>(8).conjugate() : cexp<16>(8));
+  a[13] *= ((forward) ? cexp<16>(10).conjugate() : cexp<16>(10));
+  a[14] *= ((forward) ? cexp<16>(12).conjugate() : cexp<16>(12));
+  a[15] *= ((forward) ? cexp<16>(14).conjugate() : cexp<16>(14));
 
-  FFT8(a);
-  FFT8(a + 8);
+  FFT8<forward>(a);
+  FFT8<forward>(a + 8);
 }
 
-
+template<bool forward>
 __device__ inline void FFT32(Complex* a)
 {
 #pragma unroll
@@ -193,84 +197,93 @@ __device__ inline void FFT32(Complex* a)
     FFT2(a[i], a[16 + i]);
   }
 
-  a[17] *= FBFFT32_CEXPF_2.conjugate(); // e(-2pi / 32 . 1)
-  a[18] *= FBFFT32_CEXPF_4.conjugate(); // e(-2pi / 32 . 2)
-  a[19] *= FBFFT32_CEXPF_6.conjugate(); // e(-2pi / 32 . 3)
-  a[20] *= FBFFT32_CEXPF_8.conjugate(); // e(-2pi / 32 . 4)
-  a[21] *= FBFFT32_CEXPF_A.conjugate(); // e(-2pi / 32 . 5)
-  a[22] *= FBFFT32_CEXPF_C.conjugate(); // e(-2pi / 32 . 6)
-  a[23] *= FBFFT32_CEXPF_E.conjugate(); // e(-2pi / 32 . 7)
-  a[24] *= FBFFT32_CEXPF_G.conjugate(); // e(-2pi / 32 . 8)
-  a[25] *= FBFFT32_CEXPF_I.conjugate(); // e(-2pi / 32 . 9)
-  a[26] *= FBFFT32_CEXPF_K.conjugate(); // e(-2pi / 32 . 10)
-  a[27] *= FBFFT32_CEXPF_M.conjugate(); // e(-2pi / 32 . 11)
-  a[28] *= FBFFT32_CEXPF_O.conjugate(); // e(-2pi / 32 . 12)
-  a[29] *= FBFFT32_CEXPF_Q.conjugate(); // e(-2pi / 32 . 13)
-  a[30] *= FBFFT32_CEXPF_S.conjugate(); // e(-2pi / 32 . 14)
-  a[31] *= FBFFT32_CEXPF_U.conjugate(); // e(-2pi / 32 . 15)
+  a[17] *= ((forward) ? cexp<32>(2).conjugate() : cexp<32>(2));
+  a[18] *= ((forward) ? cexp<32>(4).conjugate() : cexp<32>(4));
+  a[19] *= ((forward) ? cexp<32>(6).conjugate() : cexp<32>(6));
+  a[20] *= ((forward) ? cexp<32>(8).conjugate() : cexp<32>(8));
+  a[21] *= ((forward) ? cexp<32>(10).conjugate() : cexp<32>(10));
+  a[22] *= ((forward) ? cexp<32>(12).conjugate() : cexp<32>(12));
+  a[23] *= ((forward) ? cexp<32>(14).conjugate() : cexp<32>(14));
+  a[24] *= ((forward) ? cexp<32>(16).conjugate() : cexp<32>(16));
+  a[25] *= ((forward) ? cexp<32>(18).conjugate() : cexp<32>(18));
+  a[26] *= ((forward) ? cexp<32>(20).conjugate() : cexp<32>(20));
+  a[27] *= ((forward) ? cexp<32>(22).conjugate() : cexp<32>(22));
+  a[28] *= ((forward) ? cexp<32>(24).conjugate() : cexp<32>(24));
+  a[29] *= ((forward) ? cexp<32>(26).conjugate() : cexp<32>(26));
+  a[30] *= ((forward) ? cexp<32>(28).conjugate() : cexp<32>(28));
+  a[31] *= ((forward) ? cexp<32>(30).conjugate() : cexp<32>(30));
 
-  FFT16(a);
-  FFT16(a + 16);
+  FFT16<forward>(a);
+  FFT16<forward>(a + 16);
 }
 
-template<int N>
+template<int N, bool forward = true>
 __device__ inline void fft2dVertical(Complex *a);
 
-template<> void fft2dVertical<4>(Complex* a) {
-  FFT4(a[0], a[1], a[2], a[3]);
+template<> void fft2dVertical<4, true>(Complex* a) {
+  FFT4<true>(a[0], a[1], a[2], a[3]);
 }
 
-template<> void fft2dVertical<8>(Complex* a) {
-  FFT8(a);
+template<> void fft2dVertical<4, false>(Complex* a) {
+  FFT4<false>(a[0], a[1], a[2], a[3]);
 }
 
-template<> void fft2dVertical<16>(Complex* a) {
-  FFT16(a);
+template<> void fft2dVertical<8, true>(Complex* a) {
+  FFT8<true>(a);
 }
 
-template<> void fft2dVertical<32>(Complex* a) {
-  FFT32(a);
+template<> void fft2dVertical<8, false>(Complex* a) {
+  FFT8<false>(a);
+}
+
+template<> void fft2dVertical<16, true>(Complex* a) {
+  FFT16<true>(a);
+}
+
+template<> void fft2dVertical<16, false>(Complex* a) {
+  FFT16<false>(a);
+}
+
+template<> void fft2dVertical<32, true>(Complex* a) {
+  FFT32<true>(a);
+}
+
+template<> void fft2dVertical<32, false>(Complex* a) {
+  FFT32<false>(a);
 }
 
 //////////////////////////// FBFFT Generic ////////////////////////////////
-template <int FFTSize, int BatchesPerBlock, bool Hermitian = false>
+template <int FFTSize, int BatchesPerBlock, bool Pack = false>
 __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
+  constexpr int UB = (Pack) ? FFTSize / 2 : FFTSize / 2 + 1;
+
   // Vertical FFT: real FFTs as complex
   // Vertical FFT: bit reversal
   // Let the compiler unroll and optimize
-  if (Hermitian) {
-    fft2dVertical<FFTSize / 2>(a);
+  if (Pack) {
+    fft2dVertical<UB, true>(a);
 #pragma unroll
-    for (int i = 0; i < FFTSize / 2; ++i) {
-      if (i < detail::bitReversal<FFTSize / 2>(i)) {
+    for (int i = 0; i < UB; ++i) {
+      if (i < detail::bitReversal<UB>(i)) {
         // Avoid double swap
-        swap(a[i], a[detail::bitReversal<FFTSize / 2>(i)]);
+        swap(a[i], a[detail::bitReversal<UB>(i)]);
       }
     }
 
-    if (Hermitian) {
-      Complex r[FFTSize / 2];
-      r[0] = Complex(a[0].re() + a[0].im(), a[0].re() - a[0].im());
+    Complex r[UB];
+    r[0] = a[0].conjugate() + a[0].transpose();
 #pragma unroll
-      for (int i = 1; i < FFTSize / 2; ++i) {
-        float xpr, xmr, xpi, xmi;
-        xpr = 0.5f * (a[i].re() + a[FFTSize / 2 - i].re());
-        xmr = 0.5f * (a[i].re() - a[FFTSize / 2 - i].re());
-        xpi = 0.5f * (a[i].im() + a[FFTSize / 2 - i].im());
-        xmi = 0.5f * (a[i].im() - a[FFTSize / 2 - i].im());
-        // cos, sin (i * pi / (FFTSize / 2))
-        float cosf = cos<FFTSize / 2>(i);
-        float sinf = sin<FFTSize / 2>(i);
-        r[i] = Complex(xpr + cosf * xpi - sinf * xmr,
-                       xmi - sinf * xpi - cosf * xmr);
-      }
+    for (int i = 1; i < UB; ++i) {
+      Complex S = Complex(0.5f) * (a[i] + a[UB - i].conjugate());
+      Complex D = Complex(0.5f) * (a[i] - a[UB - i].conjugate());
+      r[i] = S - D * cexp<UB>(i).transpose();
+    }
 #pragma unroll
-      for (int i = 0 ; i < FFTSize / 2; ++i) {
-        a[i] = r[i];
-      }
+    for (int i = 0 ; i < UB; ++i) {
+      a[i] = r[i];
     }
   } else {
-    fft2dVertical<FFTSize>(a);
+    fft2dVertical<FFTSize, true>(a);
 #pragma unroll
     for (int i = 0; i < FFTSize; ++i) {
       if (i < detail::bitReversal<FFTSize>(i)) {
@@ -285,8 +298,6 @@ __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
   FFT1DRoots<FFTSize> roots;
   roots.template twiddles<true>();
 
-  constexpr int UB = (Hermitian) ? FFTSize / 2: FFTSize / 2 + 1;
-
   // Horizontal FFT: complex FFTs as complex
 #pragma unroll
   for (int i = 0; i < UB; ++i) {
@@ -300,62 +311,66 @@ __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
   }
 }
 
-
-template <int FFTSize, int BatchesPerBlock, bool Hermitian = false>
+// Only unpack IFFT supported atm
+template <int FFTSize, int BatchesPerBlock, bool PackedInput = false>
 __device__ inline void fbfft2DVerticalCoreInverse(Complex* a) {
+  // If the input does not come in packed format, invert the unpacking done by
+  // the forward pass.
+  if (!PackedInput) {
+    if (threadIdx.x > 0) {
+      a[0] = a[0] - a[FFTSize / 2].transpose().conjugate();
+    } else {
+      a[0] = Complex(a[0].re(), a[FFTSize / 2].re());
+    }
+  }
+
+  constexpr int UB = FFTSize / 2;
+
   // Prepare horizontal FFT
   // Twiddles is the same as for 1D but fully data parallel across threadIdx.y
   FFT1DRoots<FFTSize> roots;
-  roots.template twiddles<true>();
+  roots.template twiddles<false>();
 
   // Horizontal FFT: complex FFTs as complex
 #pragma unroll
-  for (int i = 0; i < FFTSize / 2 + 1; ++i) {
+  for (int i = 0; i < UB; ++i) {
     decimateInFrequency1DWarp<FFTSize>(a[i], roots[0]);
   }
 
   // Horizontal FFT: bit reversal across threads
 #pragma unroll
-  for (int i = 0; i < FFTSize / 2 + 1; ++i) {
+  for (int i = 0; i < UB; ++i) {
     swapHorizontal<FFTSize>(a[i]);
   }
 
-  #pragma unroll
-  for (int i = FFTSize / 2 + 1; i < FFTSize; ++i) {
-    a[i] = a[FFTSize - i].conjugate();
+  Complex r[FFTSize / 2];
+  r[0] = a[0].conjugate() + a[0].transpose();
+#pragma unroll
+  for (int i = 1; i < FFTSize / 2; ++i) {
+    Complex S = a[i] + a[FFTSize / 2 - i].conjugate();
+    Complex D = a[i] - a[FFTSize / 2 - i].conjugate();
+    r[i] = S - D * cexp<FFTSize / 2>(i).transpose().conjugate();
+  }
+#pragma unroll
+  for (int i = 0 ; i < FFTSize / 2; ++i) {
+    a[i] = r[i];
   }
 
   // Vertical FFT: real FFTs as complex
-  fft2dVertical<FFTSize>(a);
+  fft2dVertical<FFTSize / 2, false>(a);
 
   // Vertical FFT: bit reversal
   // Let the compiler unroll and optimize
 #pragma unroll
-  for (int i = 0; i < FFTSize; ++i) {
-    if (i < detail::bitReversal<FFTSize>(i)) {
+  for (int i = 0; i < FFTSize / 2; ++i) {
+    if (i < detail::bitReversal<FFTSize / 2>(i)) {
       // Avoid double swap
-      swap(a[i], a[detail::bitReversal<FFTSize>(i)]);
+      swap(a[i], a[detail::bitReversal<FFTSize / 2>(i)]);
     }
   }
 }
 
 
-// One single implementation is enough for all cases.
-// This implementation does not use the full Hermitian symmetry to reduce
-// flops (i.e. does not do 2 real FFTs as 1 complex or 1 2N real FFT as 1 N
-// complex FFT).
-// It is however not wasteful: only FFTSize / 2 + 1 outputs are needed and
-// computed along the y dimension.
-//
-// After further investigation, the name of the game is reduction of
-// registers. Savings flops by  Hermitian symmetry is essentially useless
-// since the GPU is completely memory bound.
-// What counts is the reduction of number of registers needed.
-// For this particular purpose, 1 2N real FFT as 1 N complex FFT is a better
-// scheme than 2 real FFTs as 1 complex.
-//
-// This is not implemented here.
-// Without any Hermitian symmetry, we achieve between 185 and 210 GB / s.
 template <int BatchDims, int FFTSize, int BatchesPerBlock, bool Unpack = true>
 __device__ __forceinline__ void fbfft2DVertical(
     DeviceTensor<float, BatchDims + 2> real,
@@ -376,7 +391,7 @@ __device__ __forceinline__ void fbfft2DVertical(
     return;
   }
 
-  // Hermitian symmetry: Perform 2 FFTs in place
+  // Hermitian packed symmetry: Perform 2 FFTs in place
   Complex a[FFTSize / 2];
   // A. read data in
   // TODO: read as float2
@@ -391,9 +406,9 @@ __device__ __forceinline__ void fbfft2DVertical(
   }
 
   // Vertical FFT first within a thread then horizontal across threads
-  // Hermitian symmetry is used to first compute FFTSize real as
+  // Hermitian packed symmetry is used to first compute FFTSize real as
   // FTSize / 2 complex
-  // Hermitian symmetry is further used to pack 2 real FFTs
+  // Hermitian packed symmetry is further used to pack 2 real FFTs
   // (a[0] and a[FFTSize / 2 - 1]) into a single complex FFT.
   fbfft2DVerticalCoreForward<FFTSize, BatchesPerBlock, true>(a);
 
@@ -407,11 +422,9 @@ __device__ __forceinline__ void fbfft2DVertical(
     if (threadIdx.x > 0) {
       Complex other = shfl(a[0], FFTSize - threadIdx.x, FFTSize);
       complexAsFloat[batch][0][threadIdx.x].template as<Complex>() =
-        Complex(0.5f * (other.conjugate() + a[0]).re(),
-                0.5f * (other.conjugate() + a[0]).im());
+        Complex(0.5f) * (other.conjugate() + a[0]);
       complexAsFloat[batch][FFTSize / 2][threadIdx.x].template as<Complex>() =
-        Complex(- 0.5f * (other.conjugate() - a[0]).im(),
-                0.5f * (other.conjugate() - a[0]).re());
+        Complex(0.5f) * (other.conjugate() - a[0]).conjugate().transpose();
     } else {
       complexAsFloat[batch][0][threadIdx.x].template as<Complex>() =
         Complex(a[0].re());
@@ -428,7 +441,7 @@ __device__ __forceinline__ void fbfft2DVertical(
 
 }
 
-template <int BatchDims, int FFTSize, int BatchesPerBlock>
+template <int BatchDims, int FFTSize, int BatchesPerBlock, bool PackedInput = false>
 __device__ __forceinline__ void fbifft2DVertical(
     DeviceTensor<Complex, BatchDims + 2> complexSrc,
     DeviceTensor<float, BatchDims + 2> realDst,
@@ -443,24 +456,29 @@ __device__ __forceinline__ void fbifft2DVertical(
     return;
   }
 
+  // If input is not packed, read FFTSize / 2 + 1 entries and repack them later.
+  constexpr int UB = (PackedInput) ? FFTSize / 2 : FFTSize / 2 + 1;
+
   // Perform 2 FFTs in place
-  Complex a[FFTSize];
-  // A. read data in
-  // TODO: read as float2
+  Complex a[UB];
+  // Read data in
   // TODO: f16 implementation
   #pragma unroll
-  for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
-    a[i] = complexSrc[batch][i][threadIdx.x].data()->conjugate();
+  for (int i = 0 ; i < UB; ++i) {
+    a[i] = complexSrc[batch][i][threadIdx.x];
   }
 
-  // B. - F.
-  fbfft2DVerticalCoreInverse<FFTSize, BatchesPerBlock, false>(a);
+  // Work it
+  fbfft2DVerticalCoreInverse<FFTSize, BatchesPerBlock, PackedInput>(a);
 
-  // C. Write the results back to memory.
+  // Write the results back to memory.
   // No need for conjugation as we know we have real results.
-  for (int i = 0 ; i < FFTSize; ++i) {
+  for (int i = 0 ; i < FFTSize; i += 2) {
     if (inBounds(i, threadIdx.x, padU, padL, realDst)) {
-      realDst[batch][i - padU][threadIdx.x - padL] = a[i].re();
+      realDst[batch][i - padU][threadIdx.x - padL] = a[i / 2].re();
+    }
+    if (inBounds(i + 1, threadIdx.x, padU, padL, realDst)) {
+      realDst[batch][i + 1 - padU][threadIdx.x - padL] = a[i / 2].im();
     }
   }
 }

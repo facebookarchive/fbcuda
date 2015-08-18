@@ -227,7 +227,86 @@ float sin<2>(int index) { return sin<4>(2 * index); }
 #define FBFFT32_CEXPF_U Complex(FBFFT32_COSF_U, FBFFT32_SINF_U)
 #define FBFFT32_CEXPF_V Complex(FBFFT32_COSF_V, FBFFT32_SINF_V)
 
-static const int kNumTwiddles = 128;
+
+
+template <int FFTSize>
+__device__ __host__ __forceinline__ Complex cexp(int index);
+
+template <>
+__device__ __host__ __forceinline__
+Complex cexp<256>(int index) {
+  return Complex();
+}
+
+template <>
+__device__ __host__ __forceinline__
+Complex cexp<128>(int index) {
+  return Complex();
+}
+
+template <>
+__device__ __host__ __forceinline__
+Complex cexp<64>(int index) {
+  return Complex();
+}
+
+template <>
+__device__ __host__ __forceinline__
+Complex cexp<32>(int index) {
+  if (index == 0) return FBFFT32_CEXPF_0;
+  if (index == 1) return FBFFT32_CEXPF_1;
+  if (index == 2) return FBFFT32_CEXPF_2;
+  if (index == 3) return FBFFT32_CEXPF_3;
+  if (index == 4) return FBFFT32_CEXPF_4;
+  if (index == 5) return FBFFT32_CEXPF_5;
+  if (index == 6) return FBFFT32_CEXPF_6;
+  if (index == 7) return FBFFT32_CEXPF_7;
+  if (index == 8) return FBFFT32_CEXPF_8;
+  if (index == 9) return FBFFT32_CEXPF_9;
+  if (index == 10) return FBFFT32_CEXPF_A;
+  if (index == 11) return FBFFT32_CEXPF_B;
+  if (index == 12) return FBFFT32_CEXPF_C;
+  if (index == 13) return FBFFT32_CEXPF_D;
+  if (index == 14) return FBFFT32_CEXPF_E;
+  if (index == 15) return FBFFT32_CEXPF_F;
+  if (index == 16) return FBFFT32_CEXPF_G;
+  if (index == 17) return FBFFT32_CEXPF_H;
+  if (index == 18) return FBFFT32_CEXPF_I;
+  if (index == 19) return FBFFT32_CEXPF_J;
+  if (index == 20) return FBFFT32_CEXPF_K;
+  if (index == 21) return FBFFT32_CEXPF_L;
+  if (index == 22) return FBFFT32_CEXPF_M;
+  if (index == 23) return FBFFT32_CEXPF_N;
+  if (index == 24) return FBFFT32_CEXPF_O;
+  if (index == 25) return FBFFT32_CEXPF_P;
+  if (index == 26) return FBFFT32_CEXPF_Q;
+  if (index == 27) return FBFFT32_CEXPF_R;
+  if (index == 28) return FBFFT32_CEXPF_S;
+  if (index == 29) return FBFFT32_CEXPF_T;
+  if (index == 30) return FBFFT32_CEXPF_U;
+  if (index == 31) return FBFFT32_CEXPF_V;
+
+  return NAN;
+}
+
+template <>
+__device__ __host__ __forceinline__
+Complex cexp<16>(int index) { return cexp<32>(2 * index); }
+
+template <>
+__device__ __host__ __forceinline__
+Complex cexp<8>(int index) { return cexp<16>(2 * index); }
+
+template <>
+__device__ __host__ __forceinline__
+Complex cexp<4>(int index) { return cexp<8>(2 * index); }
+
+template <>
+__device__ __host__ __forceinline__
+Complex cexp<2>(int index) { return cexp<4>(2 * index); }
+
+
+constexpr int kNumTwiddles = 128;
 
 // __device__, __shared__ and __constant__ variables cannot be defined as
 // external using the extern keyword. The only exception is for dynamically
