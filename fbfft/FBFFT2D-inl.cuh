@@ -470,118 +470,118 @@ FBFFTParameters::ErrorCode fbfft2D(
     return FBFFTParameters::UnsupportedSize;
   }
 
-#define FFT_SIZE 32
-#define BATCHES_PER_BLOCK 4
-  if (complexAsFloat.getSize(BatchDims + 1) == FFT_SIZE) {
-    CHECK_EQ(1, BatchDims);
-    int maxBlocks =
-      facebook::cuda::getCurrentDeviceProperties().maxGridSize[0];
-    int blx = 1;
-    int bly = 1;
-    if (real.getSize(0) / (BATCHES_PER_BLOCK) > maxBlocks) {
-      blx = maxBlocks;
-      bly =
-        ceil(real.getSize(0), maxBlocks * BATCHES_PER_BLOCK);
-    } else {
-      blx = ceil(real.getSize(0), BATCHES_PER_BLOCK);
+  {
+    constexpr int FFTSize = 32;
+    constexpr int BatchesPerBlock = 2;
+    if (complexAsFloat.getSize(BatchDims + 1) == FFTSize) {
+      CHECK_EQ(1, BatchDims);
+      int maxBlocks =
+        facebook::cuda::getCurrentDeviceProperties().maxGridSize[0];
+      int blx = 1;
+      int bly = 1;
+      if (real.getSize(0) / (BatchesPerBlock) > maxBlocks) {
+        blx = maxBlocks;
+        bly =
+          ceil(real.getSize(0), maxBlocks * BatchesPerBlock);
+      } else {
+        blx = ceil(real.getSize(0), BatchesPerBlock);
+      }
+      CHECK_LE(1, blx);
+      CHECK_LE(1, bly);
+      CHECK_LE(blx, maxBlocks);
+      CHECK_LE(bly, maxBlocks);
+      CHECK_LE(real.getSize(0), blx * bly * BatchesPerBlock);
+      dim3 blocks(blx, bly);
+      dim3 threads(FFTSize, BatchesPerBlock);
+      detail::fbfft2DVertical_32<BatchDims, BatchesPerBlock>
+        <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
+      if (cudaSuccess != cudaPeekAtLastError()) {
+        return FBFFTParameters::CudaError;
+      }
+      return FBFFTParameters::Success;
     }
-    CHECK_LE(1, blx);
-    CHECK_LE(1, bly);
-    CHECK_LE(blx, maxBlocks);
-    CHECK_LE(bly, maxBlocks);
-    CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_BLOCK);
-    dim3 blocks(blx, bly);
-    dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
-    detail::fbfft2DVertical_32<BatchDims, BATCHES_PER_BLOCK>
-      <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
-    if (cudaSuccess != cudaPeekAtLastError()) {
-      return FBFFTParameters::CudaError;
-    }
-    return FBFFTParameters::Success;
   }
-#undef BATCHES_PER_BLOCK
-#undef FFT_SIZE
 
-#define FFT_SIZE 16
-#define BATCHES_PER_BLOCK 4
-  if (complexAsFloat.getSize(BatchDims + 1) == FFT_SIZE) {
-    CHECK_EQ(1, BatchDims);
-    int maxBlocks =
-      facebook::cuda::getCurrentDeviceProperties().maxGridSize[0];
-    int blx = 1;
-    int bly = 1;
-    if (real.getSize(0) / (BATCHES_PER_BLOCK) > maxBlocks) {
-      blx = maxBlocks;
-      bly =
-        ceil(real.getSize(0), maxBlocks * BATCHES_PER_BLOCK);
-    } else {
-      blx = ceil(real.getSize(0), BATCHES_PER_BLOCK);
+  {
+    constexpr int FFTSize = 16;
+    constexpr int BatchesPerBlock = 4;
+    if (complexAsFloat.getSize(BatchDims + 1) == FFTSize) {
+      CHECK_EQ(1, BatchDims);
+      int maxBlocks =
+        facebook::cuda::getCurrentDeviceProperties().maxGridSize[0];
+      int blx = 1;
+      int bly = 1;
+      if (real.getSize(0) / (BatchesPerBlock) > maxBlocks) {
+        blx = maxBlocks;
+        bly =
+          ceil(real.getSize(0), maxBlocks * BatchesPerBlock);
+      } else {
+        blx = ceil(real.getSize(0), BatchesPerBlock);
+      }
+      CHECK_LE(1, blx);
+      CHECK_LE(1, bly);
+      CHECK_LE(blx, maxBlocks);
+      CHECK_LE(bly, maxBlocks);
+      CHECK_LE(real.getSize(0), blx * bly * BatchesPerBlock);
+      dim3 blocks(blx, bly);
+      dim3 threads(FFTSize, BatchesPerBlock);
+      detail::fbfft2DVertical_16<BatchDims, BatchesPerBlock>
+        <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
+      if (cudaSuccess != cudaPeekAtLastError()) {
+        return FBFFTParameters::CudaError;
+      }
+      return FBFFTParameters::Success;
     }
-    CHECK_LE(1, blx);
-    CHECK_LE(1, bly);
-    CHECK_LE(blx, maxBlocks);
-    CHECK_LE(bly, maxBlocks);
-    CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_BLOCK);
-    dim3 blocks(blx, bly);
-    dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
-    detail::fbfft2DVertical_16<BatchDims, BATCHES_PER_BLOCK>
-      <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
-    if (cudaSuccess != cudaPeekAtLastError()) {
-      return FBFFTParameters::CudaError;
-    }
-    return FBFFTParameters::Success;
   }
-#undef BATCHES_PER_BLOCK
-#undef FFT_SIZE
 
-#define FFT_SIZE 8
-#define BATCHES_PER_BLOCK 16
-  if (complexAsFloat.getSize(BatchDims + 1) == FFT_SIZE) {
-    CHECK_EQ(1, BatchDims);
-    int maxBlocks =
-      facebook::cuda::getCurrentDeviceProperties().maxGridSize[0];
-    int blx = 1;
-    int bly = 1;
-    if (real.getSize(0) / (BATCHES_PER_BLOCK) > maxBlocks) {
-      blx = maxBlocks;
-      bly =
-        ceil(real.getSize(0), maxBlocks * BATCHES_PER_BLOCK);
-    } else {
-      blx = ceil(real.getSize(0), BATCHES_PER_BLOCK);
+  {
+    constexpr int FFTSize = 8;
+    constexpr int BatchesPerBlock = 16;
+    if (complexAsFloat.getSize(BatchDims + 1) == FFTSize) {
+      CHECK_EQ(1, BatchDims);
+      int maxBlocks =
+        facebook::cuda::getCurrentDeviceProperties().maxGridSize[0];
+      int blx = 1;
+      int bly = 1;
+      if (real.getSize(0) / (BatchesPerBlock) > maxBlocks) {
+        blx = maxBlocks;
+        bly =
+          ceil(real.getSize(0), maxBlocks * BatchesPerBlock);
+      } else {
+        blx = ceil(real.getSize(0), BatchesPerBlock);
+      }
+      CHECK_LE(1, blx);
+      CHECK_LE(1, bly);
+      CHECK_LE(blx, maxBlocks);
+      CHECK_LE(bly, maxBlocks);
+      CHECK_LE(real.getSize(0), blx * bly * BatchesPerBlock);
+      dim3 blocks(blx, bly);
+      dim3 threads(FFTSize, BatchesPerBlock);
+      detail::fbfft2DVertical_8<BatchDims, BatchesPerBlock>
+        <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
+      if (cudaSuccess != cudaPeekAtLastError()) {
+        return FBFFTParameters::CudaError;
+      }
+      return FBFFTParameters::Success;
     }
-    CHECK_LE(1, blx);
-    CHECK_LE(1, bly);
-    CHECK_LE(blx, maxBlocks);
-    CHECK_LE(bly, maxBlocks);
-    CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_BLOCK);
-    dim3 blocks(blx, bly);
-    dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
-    detail::fbfft2DVertical_8<BatchDims, BATCHES_PER_BLOCK>
-      <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
-    if (cudaSuccess != cudaPeekAtLastError()) {
-      return FBFFTParameters::CudaError;
-    }
-    return FBFFTParameters::Success;
   }
-#undef BATCHES_PER_BLOCK
-#undef FFT_SIZE
 
 #define SELECT_FBFFT_2D_DIF_WARP_SINGLE(                                \
-  FFT_SIZE, FFTS_PER_WARP, BIT_REVERSE, ROWS_PER_WARP)                  \
-  cuda_static_assert(FFT_SIZE <= WARP_SIZE);                            \
-  if (complexAsFloat.getSize(BatchDims + 1) == FFT_SIZE) {              \
+  FFTSize, FFTS_PER_WARP, BIT_REVERSE, ROWS_PER_WARP)                  \
+  cuda_static_assert(FFTSize <= WARP_SIZE);                            \
+  if (complexAsFloat.getSize(BatchDims + 1) == FFTSize) {              \
     if (real.getSize(0) % (2 * FFTS_PER_WARP) == 0) {                   \
       dim3 blocks(ceil(real.getSize(0), 2 * FFTS_PER_WARP));            \
-      dim3 threads(FFT_SIZE * FFTS_PER_WARP,                            \
-                   ceil(FFT_SIZE, ROWS_PER_WARP));                      \
+      dim3 threads(FFTSize * FFTS_PER_WARP,                            \
+                   ceil(FFTSize, ROWS_PER_WARP));                      \
       detail::decimateInFrequencyHermitian2DWarpKernel<                 \
-        FFT_SIZE, FFTS_PER_WARP, ROWS_PER_WARP, BIT_REVERSE>            \
+        FFTSize, FFTS_PER_WARP, ROWS_PER_WARP, BIT_REVERSE>            \
         <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);  \
     } else {                                                            \
       dim3 blocks(ceil(complexAsFloat.getSize(0), 2));                  \
-      dim3 threads(FFT_SIZE, FFT_SIZE);                                 \
+      dim3 threads(FFTSize, FFTSize);                                 \
       detail::decimateInFrequencyHermitian2DWarpKernel<                 \
-        FFT_SIZE, 1, 1, BIT_REVERSE>                                    \
+        FFTSize, 1, 1, BIT_REVERSE>                                    \
         <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);  \
     }                                                                   \
     if (cudaSuccess != cudaPeekAtLastError()) {                         \
@@ -592,12 +592,12 @@ FBFFTParameters::ErrorCode fbfft2D(
 
   // Above warp level, buffer is needed, output must be N x (N / 2 + 1)
 #define SELECT_FBFFT_2D_DIF_SINGLE(                                     \
-  FFT_SIZE, ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE)                    \
-  if (complexAsFloat.getSize(BatchDims) == FFT_SIZE) {                  \
+  FFTSize, ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE)                    \
+  if (complexAsFloat.getSize(BatchDims) == FFTSize) {                  \
   dim3 blocks(complexAsFloat.getSize(0));                               \
   dim3 threads(WARP_SIZE, BLOCKDIMY);                                   \
   detail::decimateInFrequency2DKernel<                                  \
-    FFT_SIZE,  ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE>                 \
+    FFTSize,  ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE>                 \
     <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);      \
   if (cudaSuccess != cudaPeekAtLastError()) {                           \
     return FBFFTParameters::CudaError;                                  \
@@ -641,12 +641,12 @@ FBFFTParameters::ErrorCode fbfft2D(
   }
 
 #define SELECT_FBFFT_2D_DIF_SINGLE(                                     \
-  FFT_SIZE, ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE)                    \
-  if (complexSrc.getSize(BatchDims) == FFT_SIZE) {                      \
+  FFTSize, ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE)                    \
+  if (complexSrc.getSize(BatchDims) == FFTSize) {                      \
     dim3 blocks(complexSrc.getSize(0));                                 \
     dim3 threads(32, BLOCKDIMY);                                        \
-    detail::decimateInFrequency2DKernel##FFT_SIZE<                      \
-      FFT_SIZE,  ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE, true>         \
+    detail::decimateInFrequency2DKernel##FFTSize<                      \
+      FFTSize,  ROWS_PER_KERNEL, BLOCKDIMY, BIT_REVERSE, true>         \
       <<<blocks, threads, 0, s>>>(complexSrc, complexDst);              \
       if (cudaSuccess != cudaPeekAtLastError()) {                       \
       return FBFFTParameters::CudaError;                                \

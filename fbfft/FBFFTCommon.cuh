@@ -151,6 +151,46 @@ struct FFT1DRoots : public FFT1DCoeffs<FFTSize> {
   }
 };
 
+// Given an FFT of size FFTSize and given the threadIdx.x of the current
+// thread, what are the successive twiddles that the thread needs to apply.
+// Hoisting this computation out allows trading off a log number of registers
+// for a linear number of shuffle operations.
+template <int FFTSize>
+struct FFT1DRegisterTwiddles {
+  constexpr static int LogFFTSize = getMSB<FFTSize>();
+
+  __device__ __forceinline__ FFT1DRegisterTwiddles(bool forward) {
+    // logStep starts at 1
+    #pragma unroll
+    for (int logStep = 1; logStep <= LogFFTSize; ++logStep) {
+      // Every thread with the bit (FFTSize >> logStep) set has a non trivial
+      // twiddle.
+      bool twiddling = (threadIdx.x & (FFTSize >> logStep));
+      if (!twiddling) {
+        roots[logStep - 1] = Complex(1.0f);
+      } else {
+        int subPosition = threadIdx.x & ((FFTSize >> logStep) - 1);
+        // For instance FFT size of 16, logStep 2, thread 13 ->
+        //   exp(+/- 2 * 2 pi / 16)
+        int twiddleFactor = subPosition << (logStep - 1);
+        // Increment accounts for the fact that the twiddleFactors array has
+        // kNumTwiddles entries and we only want the ones for FFTSize.
+        // Also we are always talking in multiples of 2 pi
+        constexpr int increment = 2 * (kNumTwiddles / FFTSize);
+        roots[logStep - 1] = (forward)  ?
+          ldg(((Complex*)twiddleFactors) + twiddleFactor * increment).conjugate() :
+          ldg(((Complex*)twiddleFactors) + twiddleFactor * increment);
+      }
+    }
+  }
+
+  __device__ __forceinline__ const Complex& operator[](int logStep) const {
+    return roots[logStep - 1];
+  }
+
+  Complex roots[LogFFTSize];
+};
+
 template <int FFTSize>
 struct FFT1DBitReversal {
   enum {
@@ -445,6 +485,27 @@ void decimateInFrequency1DWarp(Complex& coeff, Complex& root) {
       // Last step just does radix-2 + / - which is what otherCoeff contains
       coeff = otherCoeff;
     }
+  }
+}
+
+template <int FFTSize>
+__device__ inline
+void decimateInFrequency1DWarp(
+    Complex& coeff, const FFT1DRegisterTwiddles<FFTSize>& roots) {
+  // Cannot be static due to upstream mix of function calls
+  assert(FFTSize <= WARP_SIZE);
+
+  int LogFFTSize = getMSB<FFTSize>();
+
+#pragma unroll
+  for (int logStep = 1; logStep <= LogFFTSize; ++logStep) {
+    Complex otherCoeff =
+      shfl_xor(coeff, FFTSize >> logStep, FFTSize >> (logStep - 1));
+
+    otherCoeff = (threadIdx.x & (FFTSize >> logStep)) ?
+      otherCoeff - coeff : coeff + otherCoeff;
+
+    coeff = otherCoeff * roots[logStep];
   }
 }
 

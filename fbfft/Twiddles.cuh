@@ -80,118 +80,119 @@ namespace {
 #define FBFFT32_SINF_V   FBFFT32_COSF_F
 
 template <int FFTSize>
-__device__ __host__ __forceinline__ float cos(int index);
+__device__ __host__ __forceinline__
+constexpr float cos(int index);
 
 template <>
-__device__ __host__ __forceinline__ float cos<32>(int index) {
-  if (index == 0) return FBFFT32_COSF_0;
-  if (index == 1) return FBFFT32_COSF_1;
-  if (index == 2) return FBFFT32_COSF_2;
-  if (index == 3) return FBFFT32_COSF_3;
-  if (index == 4) return FBFFT32_COSF_4;
-  if (index == 5) return FBFFT32_COSF_5;
-  if (index == 6) return FBFFT32_COSF_6;
-  if (index == 7) return FBFFT32_COSF_7;
-  if (index == 8) return FBFFT32_COSF_8;
-  if (index == 9) return FBFFT32_COSF_9;
-  if (index == 10) return FBFFT32_COSF_A;
-  if (index == 11) return FBFFT32_COSF_B;
-  if (index == 12) return FBFFT32_COSF_C;
-  if (index == 13) return FBFFT32_COSF_D;
-  if (index == 14) return FBFFT32_COSF_E;
-  if (index == 15) return FBFFT32_COSF_F;
-  if (index == 16) return FBFFT32_COSF_G;
-  if (index == 17) return FBFFT32_COSF_H;
-  if (index == 18) return FBFFT32_COSF_I;
-  if (index == 19) return FBFFT32_COSF_J;
-  if (index == 20) return FBFFT32_COSF_K;
-  if (index == 21) return FBFFT32_COSF_L;
-  if (index == 22) return FBFFT32_COSF_M;
-  if (index == 23) return FBFFT32_COSF_N;
-  if (index == 24) return FBFFT32_COSF_O;
-  if (index == 25) return FBFFT32_COSF_P;
-  if (index == 26) return FBFFT32_COSF_Q;
-  if (index == 27) return FBFFT32_COSF_R;
-  if (index == 28) return FBFFT32_COSF_S;
-  if (index == 29) return FBFFT32_COSF_T;
-  if (index == 30) return FBFFT32_COSF_U;
-  if (index == 31) return FBFFT32_COSF_V;
-
-  return NAN;
+__device__ __host__ __forceinline__
+constexpr float cos<32>(int index) {
+  return (index == 0) ? FBFFT32_COSF_0 :
+    ((index == 1) ? FBFFT32_COSF_1 :
+     ((index == 2) ? FBFFT32_COSF_2:
+      ((index == 3) ? FBFFT32_COSF_3:
+       ((index == 4) ? FBFFT32_COSF_4:
+        ((index == 5) ? FBFFT32_COSF_5:
+         ((index == 6) ? FBFFT32_COSF_6:
+          ((index == 7) ? FBFFT32_COSF_7:
+           ((index == 8) ? FBFFT32_COSF_8:
+            ((index == 9) ? FBFFT32_COSF_9:
+             ((index == 10) ? FBFFT32_COSF_A:
+              ((index == 11) ? FBFFT32_COSF_B:
+               ((index == 12) ? FBFFT32_COSF_C:
+                ((index == 13) ? FBFFT32_COSF_D:
+                 ((index == 14) ? FBFFT32_COSF_E:
+                  ((index == 15) ? FBFFT32_COSF_F:
+                   ((index == 16) ? FBFFT32_COSF_G:
+                    ((index == 17) ? FBFFT32_COSF_H:
+                     ((index == 18) ? FBFFT32_COSF_I:
+                      ((index == 19) ? FBFFT32_COSF_J:
+                       ((index == 20) ? FBFFT32_COSF_K:
+                        ((index == 21) ? FBFFT32_COSF_L:
+                         ((index == 22) ? FBFFT32_COSF_M:
+                          ((index == 23) ? FBFFT32_COSF_N:
+                           ((index == 24) ? FBFFT32_COSF_O:
+                            ((index == 25) ? FBFFT32_COSF_P:
+                             ((index == 26) ? FBFFT32_COSF_Q:
+                              ((index == 27) ? FBFFT32_COSF_R:
+                               ((index == 28) ? FBFFT32_COSF_S:
+                                ((index == 29) ? FBFFT32_COSF_T:
+                                 ((index == 30) ? FBFFT32_COSF_U:
+                                  ((index == 31) ? FBFFT32_COSF_V:
+                                   NAN)))))))))))))))))))))))))))))));
 }
 
 template <>
 __device__ __host__ __forceinline__
-float cos<16>(int index) { return cos<32>(2 * index); }
+constexpr float cos<16>(int index) { return cos<32>(2 * index); }
 
 template <>
 __device__ __host__ __forceinline__
-float cos<8>(int index) { return cos<16>(2 * index); }
+constexpr float cos<8>(int index) { return cos<16>(2 * index); }
 
 template <>
 __device__ __host__ __forceinline__
-float cos<4>(int index) { return cos<8>(2 * index); }
+constexpr float cos<4>(int index) { return cos<8>(2 * index); }
 
 template <>
 __device__ __host__ __forceinline__
-float cos<2>(int index) { return cos<4>(2 * index); }
+constexpr float cos<2>(int index) { return cos<4>(2 * index); }
 
-template <int FFTSize> __device__ __host__ __forceinline__ float sin(int index);
+template <int FFTSize> __device__ __host__ __forceinline__
+constexpr float sin(int index);
 
 template <>
 __device__ __host__ __forceinline__
-float sin<32>(int index) {
-  if (index == 0) return FBFFT32_SINF_0;
-  if (index == 1) return FBFFT32_SINF_1;
-  if (index == 2) return FBFFT32_SINF_2;
-  if (index == 3) return FBFFT32_SINF_3;
-  if (index == 4) return FBFFT32_SINF_4;
-  if (index == 5) return FBFFT32_SINF_5;
-  if (index == 6) return FBFFT32_SINF_6;
-  if (index == 7) return FBFFT32_SINF_7;
-  if (index == 8) return FBFFT32_SINF_8;
-  if (index == 9) return FBFFT32_SINF_9;
-  if (index == 10) return FBFFT32_SINF_A;
-  if (index == 11) return FBFFT32_SINF_B;
-  if (index == 12) return FBFFT32_SINF_C;
-  if (index == 13) return FBFFT32_SINF_D;
-  if (index == 14) return FBFFT32_SINF_E;
-  if (index == 15) return FBFFT32_SINF_F;
-  if (index == 16) return FBFFT32_SINF_G;
-  if (index == 17) return FBFFT32_SINF_H;
-  if (index == 18) return FBFFT32_SINF_I;
-  if (index == 19) return FBFFT32_SINF_J;
-  if (index == 20) return FBFFT32_SINF_K;
-  if (index == 21) return FBFFT32_SINF_L;
-  if (index == 22) return FBFFT32_SINF_M;
-  if (index == 23) return FBFFT32_SINF_N;
-  if (index == 24) return FBFFT32_SINF_O;
-  if (index == 25) return FBFFT32_SINF_P;
-  if (index == 26) return FBFFT32_SINF_Q;
-  if (index == 27) return FBFFT32_SINF_R;
-  if (index == 28) return FBFFT32_SINF_S;
-  if (index == 29) return FBFFT32_SINF_T;
-  if (index == 30) return FBFFT32_SINF_U;
-  if (index == 31) return FBFFT32_SINF_V;
-
-  return NAN;
+constexpr float sin<32>(int index) {
+  return (index == 0) ? FBFFT32_SINF_0:
+    ((index == 1) ? FBFFT32_SINF_1:
+     ((index == 2) ? FBFFT32_SINF_2:
+      ((index == 3) ? FBFFT32_SINF_3:
+       ((index == 4) ? FBFFT32_SINF_4:
+        ((index == 5) ? FBFFT32_SINF_5:
+         ((index == 6) ? FBFFT32_SINF_6:
+          ((index == 7) ? FBFFT32_SINF_7:
+           ((index == 8) ? FBFFT32_SINF_8:
+            ((index == 9) ? FBFFT32_SINF_9:
+             ((index == 10) ? FBFFT32_SINF_A:
+              ((index == 11) ? FBFFT32_SINF_B:
+               ((index == 12) ? FBFFT32_SINF_C:
+                ((index == 13) ? FBFFT32_SINF_D:
+                 ((index == 14) ? FBFFT32_SINF_E:
+                  ((index == 15) ? FBFFT32_SINF_F:
+                   ((index == 16) ? FBFFT32_SINF_G:
+                    ((index == 17) ? FBFFT32_SINF_H:
+                     ((index == 18) ? FBFFT32_SINF_I:
+                      ((index == 19) ? FBFFT32_SINF_J:
+                       ((index == 20) ? FBFFT32_SINF_K:
+                        ((index == 21) ? FBFFT32_SINF_L:
+                         ((index == 22) ? FBFFT32_SINF_M:
+                          ((index == 23) ? FBFFT32_SINF_N:
+                           ((index == 24) ? FBFFT32_SINF_O:
+                            ((index == 25) ? FBFFT32_SINF_P:
+                             ((index == 26) ? FBFFT32_SINF_Q:
+                              ((index == 27) ? FBFFT32_SINF_R:
+                               ((index == 28) ? FBFFT32_SINF_S:
+                                ((index == 29) ? FBFFT32_SINF_T:
+                                 ((index == 30) ? FBFFT32_SINF_U:
+                                  ((index == 31) ? FBFFT32_SINF_V:
+                                   NAN)))))))))))))))))))))))))))))));
 }
 
 template <>
 __device__ __host__ __forceinline__
-float sin<16>(int index) { return sin<32>(2 * index); }
+constexpr float sin<16>(int index) { return sin<32>(2 * index); }
 
 template <>
 __device__ __host__ __forceinline__
-float sin<8>(int index) { return sin<16>(2 * index); }
+constexpr float sin<8>(int index) { return sin<16>(2 * index); }
 
 template <>
 __device__ __host__ __forceinline__
-float sin<4>(int index) { return sin<8>(2 * index); }
+constexpr float sin<4>(int index) { return sin<8>(2 * index); }
 
 template <>
 __device__ __host__ __forceinline__
-float sin<2>(int index) { return sin<4>(2 * index); }
+constexpr float sin<2>(int index) { return sin<4>(2 * index); }
 
 
 #define FBFFT32_CEXPF_0 Complex(FBFFT32_COSF_0, FBFFT32_SINF_0)
@@ -253,40 +254,39 @@ Complex cexp<64>(int index) {
 template <>
 __device__ __host__ __forceinline__
 Complex cexp<32>(int index) {
-  if (index == 0) return FBFFT32_CEXPF_0;
-  if (index == 1) return FBFFT32_CEXPF_1;
-  if (index == 2) return FBFFT32_CEXPF_2;
-  if (index == 3) return FBFFT32_CEXPF_3;
-  if (index == 4) return FBFFT32_CEXPF_4;
-  if (index == 5) return FBFFT32_CEXPF_5;
-  if (index == 6) return FBFFT32_CEXPF_6;
-  if (index == 7) return FBFFT32_CEXPF_7;
-  if (index == 8) return FBFFT32_CEXPF_8;
-  if (index == 9) return FBFFT32_CEXPF_9;
-  if (index == 10) return FBFFT32_CEXPF_A;
-  if (index == 11) return FBFFT32_CEXPF_B;
-  if (index == 12) return FBFFT32_CEXPF_C;
-  if (index == 13) return FBFFT32_CEXPF_D;
-  if (index == 14) return FBFFT32_CEXPF_E;
-  if (index == 15) return FBFFT32_CEXPF_F;
-  if (index == 16) return FBFFT32_CEXPF_G;
-  if (index == 17) return FBFFT32_CEXPF_H;
-  if (index == 18) return FBFFT32_CEXPF_I;
-  if (index == 19) return FBFFT32_CEXPF_J;
-  if (index == 20) return FBFFT32_CEXPF_K;
-  if (index == 21) return FBFFT32_CEXPF_L;
-  if (index == 22) return FBFFT32_CEXPF_M;
-  if (index == 23) return FBFFT32_CEXPF_N;
-  if (index == 24) return FBFFT32_CEXPF_O;
-  if (index == 25) return FBFFT32_CEXPF_P;
-  if (index == 26) return FBFFT32_CEXPF_Q;
-  if (index == 27) return FBFFT32_CEXPF_R;
-  if (index == 28) return FBFFT32_CEXPF_S;
-  if (index == 29) return FBFFT32_CEXPF_T;
-  if (index == 30) return FBFFT32_CEXPF_U;
-  if (index == 31) return FBFFT32_CEXPF_V;
-
-  return NAN;
+  return (index == 0) ? FBFFT32_CEXPF_0:
+    ((index == 1) ? FBFFT32_CEXPF_1:
+     ((index == 2) ? FBFFT32_CEXPF_2:
+      ((index == 3) ? FBFFT32_CEXPF_3:
+       ((index == 4) ? FBFFT32_CEXPF_4:
+        ((index == 5) ? FBFFT32_CEXPF_5:
+         ((index == 6) ? FBFFT32_CEXPF_6:
+          ((index == 7) ? FBFFT32_CEXPF_7:
+           ((index == 8) ? FBFFT32_CEXPF_8:
+            ((index == 9) ? FBFFT32_CEXPF_9:
+             ((index == 10) ? FBFFT32_CEXPF_A:
+              ((index == 11) ? FBFFT32_CEXPF_B:
+               ((index == 12) ? FBFFT32_CEXPF_C:
+                ((index == 13) ? FBFFT32_CEXPF_D:
+                 ((index == 14) ? FBFFT32_CEXPF_E:
+                  ((index == 15) ? FBFFT32_CEXPF_F:
+                   ((index == 16) ? FBFFT32_CEXPF_G:
+                    ((index == 17) ? FBFFT32_CEXPF_H:
+                     ((index == 18) ? FBFFT32_CEXPF_I:
+                      ((index == 19) ? FBFFT32_CEXPF_J:
+                       ((index == 20) ? FBFFT32_CEXPF_K:
+                        ((index == 21) ? FBFFT32_CEXPF_L:
+                         ((index == 22) ? FBFFT32_CEXPF_M:
+                          ((index == 23) ? FBFFT32_CEXPF_N:
+                           ((index == 24) ? FBFFT32_CEXPF_O:
+                            ((index == 25) ? FBFFT32_CEXPF_P:
+                             ((index == 26) ? FBFFT32_CEXPF_Q:
+                              ((index == 27) ? FBFFT32_CEXPF_R:
+                               ((index == 28) ? FBFFT32_CEXPF_S:
+                                ((index == 29) ? FBFFT32_CEXPF_T:
+                                 ((index == 30) ? FBFFT32_CEXPF_U:
+                                  ((index == 31) ? FBFFT32_CEXPF_V:
+                                   NAN)))))))))))))))))))))))))))))));
 }
 
 template <>
