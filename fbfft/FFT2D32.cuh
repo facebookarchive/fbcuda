@@ -249,8 +249,8 @@ __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
     }
 
     if (Hermitian) {
-      Complex r[FFTSize / 2 + 1];
-      r[0] = Complex(a[0].re() + a[0].im(), 0.0f);
+      Complex r[FFTSize / 2];
+      r[0] = Complex(a[0].re() + a[0].im(), a[0].re() - a[0].im());
 #pragma unroll
       for (int i = 1; i < FFTSize / 2; ++i) {
         float xpr, xmr, xpi, xmi;
@@ -264,9 +264,8 @@ __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
         r[i] = Complex(xpr + cosf * xpi - sinf * xmr,
                        xmi - sinf * xpi - cosf * xmr);
       }
-      r[FFTSize / 2] = Complex(a[0].re() - a[0].im(), 0.0f);
 #pragma unroll
-      for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
+      for (int i = 0 ; i < FFTSize / 2; ++i) {
         a[i] = r[i];
       }
     }
@@ -286,7 +285,7 @@ __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
   FFT1DRoots<FFTSize> roots;
   roots.template twiddles<true>();
 
-  constexpr int UB = (Hermitian) ? FFTSize / 2 + 1 : FFTSize / 2 + 1;
+  constexpr int UB = (Hermitian) ? FFTSize / 2: FFTSize / 2 + 1;
 
   // Horizontal FFT: complex FFTs as complex
 #pragma unroll
@@ -299,7 +298,6 @@ __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
   for (int i = 0; i < UB; ++i) {
     swapHorizontal<FFTSize>(a[i]);
   }
-
 }
 
 
@@ -341,6 +339,7 @@ __device__ inline void fbfft2DVerticalCoreInverse(Complex* a) {
   }
 }
 
+
 // One single implementation is enough for all cases.
 // This implementation does not use the full Hermitian symmetry to reduce
 // flops (i.e. does not do 2 real FFTs as 1 complex or 1 2N real FFT as 1 N
@@ -357,7 +356,7 @@ __device__ inline void fbfft2DVerticalCoreInverse(Complex* a) {
 //
 // This is not implemented here.
 // Without any Hermitian symmetry, we achieve between 185 and 210 GB / s.
-template <int BatchDims, int FFTSize, int BatchesPerBlock>
+template <int BatchDims, int FFTSize, int BatchesPerBlock, bool Unpack = true>
 __device__ __forceinline__ void fbfft2DVertical(
     DeviceTensor<float, BatchDims + 2> real,
     DeviceTensor<float, BatchDims + 3> complexAsFloat,
@@ -377,27 +376,52 @@ __device__ __forceinline__ void fbfft2DVertical(
     return;
   }
 
-  constexpr bool Hermitian = true;
-  if (Hermitian) {
-    // Perform 2 FFTs in place
-    Complex a[FFTSize / 2  + 1];
-    // A. read data in
-    // TODO: read as float2
-    // TODO: f16 implementation
+  // Hermitian symmetry: Perform 2 FFTs in place
+  Complex a[FFTSize / 2];
+  // A. read data in
+  // TODO: read as float2
+  // TODO: f16 implementation
 #pragma unroll
-    for (int i = 0 ; i < FFTSize; i += 2) {
-      float f1 = inBounds(i, threadIdx.x, padU, padL, real) ?
-        real[batch][i - padU][threadIdx.x - padL].ldg() : 0.0f;
-      float f2 = inBounds(i + 1, threadIdx.x, padU, padL, real) ?
-        real[batch][i + 1 - padU][threadIdx.x - padL].ldg() : 0.0f;
-      a[i / 2] = Complex(f1, f2);
+  for (int i = 0 ; i < FFTSize; i += 2) {
+    float f1 = inBounds(i, threadIdx.x, padU, padL, real) ?
+      real[batch][i - padU][threadIdx.x - padL].ldg() : 0.0f;
+    float f2 = inBounds(i + 1, threadIdx.x, padU, padL, real) ?
+      real[batch][i + 1 - padU][threadIdx.x - padL].ldg() : 0.0f;
+    a[i / 2] = Complex(f1, f2);
+  }
+
+  // Vertical FFT first within a thread then horizontal across threads
+  // Hermitian symmetry is used to first compute FFTSize real as
+  // FTSize / 2 complex
+  // Hermitian symmetry is further used to pack 2 real FFTs
+  // (a[0] and a[FFTSize / 2 - 1]) into a single complex FFT.
+  fbfft2DVerticalCoreForward<FFTSize, BatchesPerBlock, true>(a);
+
+  // This latter symmetry needs unpacking to use with gemm routines.
+  if (Unpack) {
+#pragma unroll
+    for (int i = 1 ; i < FFTSize / 2; ++i) {
+      complexAsFloat[batch][i][threadIdx.x].template as<Complex>() = a[i];
     }
 
-    // B. - F.
-    fbfft2DVerticalCoreForward<FFTSize, BatchesPerBlock, true>(a);
-
+    if (threadIdx.x > 0) {
+      Complex other = shfl(a[0], FFTSize - threadIdx.x, FFTSize);
+      complexAsFloat[batch][0][threadIdx.x].template as<Complex>() =
+        Complex(0.5f * (other.conjugate() + a[0]).re(),
+                0.5f * (other.conjugate() + a[0]).im());
+      complexAsFloat[batch][FFTSize / 2][threadIdx.x].template as<Complex>() =
+        Complex(- 0.5f * (other.conjugate() - a[0]).im(),
+                0.5f * (other.conjugate() - a[0]).re());
+    } else {
+      complexAsFloat[batch][0][threadIdx.x].template as<Complex>() =
+        Complex(a[0].re());
+      complexAsFloat[batch][FFTSize / 2][threadIdx.x].template as<Complex>() =
+        Complex(a[0].im());
+    }
+  } else {
+    // If a specialized gemm kernel is available, no need to unpack
 #pragma unroll
-    for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
+    for (int i = 0 ; i < FFTSize / 2; ++i) {
       complexAsFloat[batch][i][threadIdx.x].template as<Complex>() = a[i];
     }
   }

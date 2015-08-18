@@ -471,7 +471,7 @@ FBFFTParameters::ErrorCode fbfft2D(
   }
 
 #define FFT_SIZE 32
-#define BATCHES_PER_BLOCK 2
+#define BATCHES_PER_BLOCK 4
   if (complexAsFloat.getSize(BatchDims + 1) == FFT_SIZE) {
     CHECK_EQ(1, BatchDims);
     int maxBlocks =
