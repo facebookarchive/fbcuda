@@ -76,8 +76,8 @@ __device__ inline int adjustedThreadIdxY() {
 template <int FFTSize, int FFTPerWarp>
 __device__ inline int adjustedBatch() {
   if (FFTSize < WARP_SIZE) {
-    int LogFFTSize = getMSB<FFTSize>();
-    int LogFFTPerWarp = getMSB<FFTPerWarp>();
+    int LogFFTSize = getMSB(FFTSize);
+    int LogFFTPerWarp = getMSB(FFTPerWarp);
     return (threadIdx.x >> LogFFTSize) +
       (blockIdx.x << LogFFTPerWarp) +
       ((threadIdx.z * gridDim.x) << LogFFTPerWarp);
@@ -96,8 +96,8 @@ __device__ inline int adjustedBatch() {
 template <int FFTSize, int FFTPerWarp, bool ForwardFFT>
 __device__ inline int adjustedBatchR2C() {
   if (FFTSize < WARP_SIZE) {
-    int LogFFTSize = getMSB<FFTSize>();
-    int LogFFTPerWarp = getMSB<FFTPerWarp>();
+    int LogFFTSize = getMSB(FFTSize);
+    int LogFFTPerWarp = getMSB(FFTPerWarp);
     return 2 * ((threadIdx.x >> LogFFTSize) +
                 (blockIdx.x << LogFFTPerWarp) +
                 ((threadIdx.z * gridDim.x) << LogFFTPerWarp));
@@ -157,7 +157,7 @@ struct FFT1DRoots : public FFT1DCoeffs<FFTSize> {
 // for a linear number of shuffle operations.
 template <int FFTSize>
 struct FFT1DRegisterTwiddles {
-  constexpr static int LogFFTSize = getMSB<FFTSize>();
+  static const int LogFFTSize = getMSB(FFTSize);
 
   __device__ __forceinline__ FFT1DRegisterTwiddles(bool forward) {
     // logStep starts at 1
@@ -204,7 +204,7 @@ struct FFT1DBitReversal {
   }
 
   __device__ inline void computeBitReversal(const int index) {
-    int LogFFTSize = cuda::getMSB<FFTSize>();
+    int LogFFTSize = cuda::getMSB(FFTSize);
     int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
     bitReversed[index] = reverse(x, LogFFTSize);
   }
@@ -230,7 +230,7 @@ void bitReverse1DWarp(FFT1DCoeffs<FFTSize>& coeffs,
 
   // Only reverse and permute within blockDim.x boundary which allows to cram
   // multiple FFTs smaller than WARP_SIZE into a single warp
-  int LogFFTPerWarp = cuda::getMSB<FFTPerWarp>();
+  int LogFFTPerWarp = cuda::getMSB(FFTPerWarp);
   coeffs[index] = shfl(coeffs[index],
                        bits[index],
                        blockDim.x >> LogFFTPerWarp);
@@ -295,7 +295,7 @@ __device__ inline void load1D(const DeviceTensor<float, 2>& real,
                               const int batch,
                               const int index,
                               const int padL) {
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
 
@@ -326,7 +326,7 @@ __device__ inline void load1DR2C(const DeviceTensor<float, 2>& real,
                                  const int batch,
                                  const int index,
                                  const int padL) {
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + index * blockDim.x;
 
@@ -450,7 +450,7 @@ void decimateInFrequency1DWarp(Complex& coeff, Complex& root) {
   // Cannot be static due to upstream mix of function calls
   assert(FFTSize <= WARP_SIZE);
 
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
 
 #pragma unroll
   for (int logStep = 1; logStep <= LogFFTSize; ++logStep) {
@@ -495,7 +495,7 @@ void decimateInFrequency1DWarp(
   // Cannot be static due to upstream mix of function calls
   assert(FFTSize <= WARP_SIZE);
 
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
 
 #pragma unroll
   for (int logStep = 1; logStep <= LogFFTSize; ++logStep) {
@@ -633,7 +633,7 @@ __device__ inline
 void decimateInFrequency1D(FFT1DCoeffs<FFTSize> coeffsArray[RowsPerWarp],
                            FFT1DRoots<FFTSize>& roots,
                            const int batch) {
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   const int kDeltaLog = LogFFTSize - LOG_WARP_SIZE;
   {
     // Computation is all within the same warp across registers.
@@ -787,8 +787,8 @@ __device__ void decimateInFrequency1DKernel(DeviceTensor<float, 2> real,
                                             DeviceTensor<float, 3> complex,
                                             int batch,
                                             const int padL) {
-  int LogFFTSize = getMSB<FFTSize>();
-  int LogFFTPerWarp = getMSB<FFTPerWarp>();
+  int LogFFTSize = getMSB(FFTSize);
+  int LogFFTPerWarp = getMSB(FFTPerWarp);
   if (FFTSize <= WARP_SIZE) {
     FFT1DCoeffs<FFTSize> coeffs;
     load1DR2C<FFTSize, ForwardFFT, EvenDivideBatches>(
@@ -883,7 +883,7 @@ template <int FFTSize, int SMemRows, int RowsPerWarp, int FFTPerWarp>
 __device__ inline void transpose2DMultiple(
       FFT1DCoeffs<FFTSize>& coeffs,
       Complex(*buffer)[SMemRows][SMemRows + 1]) {
-  const int LogFFTSize = getMSB<FFTSize>();
+  const int LogFFTSize = getMSB(FFTSize);
   const int thx0 = (threadIdx.x >> LogFFTSize) << LogFFTSize;
 #pragma unroll
   for (int row = 0; row < RowsPerWarp; ++row) {

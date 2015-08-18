@@ -28,7 +28,7 @@ __device__ __forceinline__ void load2D(
     const int offsetRow,
     const int indexRow,
     const int indexCol) {
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int col = adjustedThreadIdxX<FFTSize>() + indexCol * blockDim.x;
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
@@ -66,7 +66,7 @@ __device__ __forceinline__ void load2D2a(
     const int offsetRow,
     const int indexRow,
     const int indexCol) {
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int col = adjustedThreadIdxX<FFTSize>() + indexCol * blockDim.x;
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
@@ -105,7 +105,7 @@ __device__ __forceinline__ void load2D2b(
     const int indexRow,
     const int indexCol) {
   if (batch < complex.getSize(0)) {
-    int LogFFTSize = getMSB<FFTSize>();
+    int LogFFTSize = getMSB(FFTSize);
     // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
     int col = adjustedThreadIdxX<FFTSize>() + indexCol * blockDim.x;
     // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
@@ -266,7 +266,7 @@ __device__ __forceinline__ void decimateInFrequencyInverse2DKernel(
   assert(dst.getSize(1) == FFTSize);
   assert(dst.getSize(2) == FFTSize);
 
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   // Enforce that the number of FFTs we perform is divisible by the number of
   // FFTs per warp, otherwise weird divergence will occur and possibly bugs
   const int batch = adjustedBatch<FFTSize, 1>();
@@ -373,7 +373,7 @@ __device__ __forceinline__ void decimateInFrequencyInverse2DKernel(
   // different storage areas
   assert(src.dataAs<float>() != real.data());
 
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   // Enforce that the number of FFTs we perform is divisible by the number of
   // FFTs per warp, otherwise weird divergence will occur and possibly bugs
   const int batch = adjustedBatch<FFTSize, 1>();

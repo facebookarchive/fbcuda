@@ -29,7 +29,7 @@ __device__ __forceinline__ void load2D(
     const int indexY,
     const int padL,
     const int padU) {
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + indexX * blockDim.x;
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
@@ -51,7 +51,7 @@ __device__ __forceinline__ void load2DR2C(
     const int indexY,
     const int padL,
     const int padU) {
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
   int x = adjustedThreadIdxX<FFTSize>() + indexX * blockDim.x;
   // adjustedThreadIdxX<FFTSize>() crams multiple < WARP_SIZE FFTs in a warp
@@ -97,7 +97,7 @@ template <int FFTSize, int SMemRows, int RowsPerWarp, int FFTPerWarp>
 __device__ __forceinline__ void transpose2DHermitianMultiple(
       FFT1DCoeffs<FFTSize> (&coeffsArray)[RowsPerWarp],
       Complex(*buffer)[SMemRows + 1]) {
-  const int LogFFTSize = getMSB<FFTSize>();
+  const int LogFFTSize = getMSB(FFTSize);
   const int thx0 = (threadIdx.x >> LogFFTSize) << LogFFTSize;
 #pragma unroll
   for (int row = 0; row < RowsPerWarp; ++row) {
@@ -135,7 +135,7 @@ __global__ void decimateInFrequencyHermitian2DWarpKernel(
   assert(FFTPerWarp * FFTSize == blockDim.x);
   assert(real.getSize(0) % FFTPerWarp == 0);
 
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   // Enforce that the number of FFTs we perform is divisible by the number of
   // FFTs per warp, otherwise weird divergence will occur and possibly bugs.
   const int batch = adjustedBatchR2C<FFTSize, FFTPerWarp, true>();
@@ -241,7 +241,7 @@ __global__ void decimateInFrequency2DKernel(
   // It *cannot* update in place transposed -> ensure we have the same
   // dimensions to update one row at a time.
 
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   // Enforce that the number of FFTs we perform is divisible by the number of
   // FFTs per warp, otherwise weird divergence will occur and possibly bugs
   const int batch = adjustedBatch<FFTSize, 1>();
@@ -330,7 +330,7 @@ __device__ __forceinline__ void decimateInFrequency2DKernel(
   // different storage areas
   assert(src.data() != dst.data());
 
-  int LogFFTSize = getMSB<FFTSize>();
+  int LogFFTSize = getMSB(FFTSize);
   // Enforce that the number of FFTs we perform is divisible by the number of
   // FFTs per warp, otherwise weird divergence will occur and possibly bugs
   const int batch = adjustedBatch<FFTSize, 1>();
@@ -467,6 +467,9 @@ FBFFTParameters::ErrorCode fbfft2D(
          (complexAsFloat.getSize(BatchDims) ==
           numHermitian(complexAsFloat.getSize(BatchDims + 1))));
   if (complexAsFloat.getSize(BatchDims) > 128) {
+    // FBFFT only optimizes for sizes 8, 16 and 32 which are useful in FFT
+    // based convolutions. Larger sizes are not optimized and are often slower
+    // than cufft.
     return FBFFTParameters::UnsupportedSize;
   }
 
@@ -637,6 +640,9 @@ FBFFTParameters::ErrorCode fbfft2D(
   // Output is the real output and must be sized as the input, must enforce
   // this upstream
   if (complexSrc.getSize(BatchDims + 1) > 128) {
+    // FBFFT only optimizes for sizes 8, 16 and 32 which are useful in FFT
+    // based convolutions. Larger sizes are not optimized and are often slower
+    // than cufft.
     return FBFFTParameters::UnsupportedSize;
   }
 

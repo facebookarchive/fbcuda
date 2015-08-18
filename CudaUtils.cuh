@@ -182,26 +182,20 @@ unsigned long setBitfield(unsigned long val, unsigned toInsert,
 /**
    Returns the index of the most significant 1 bit in `val`.
 */
-__device__ __forceinline__ int getMSB(int val) {
-  unsigned ret;
-  asm("bfind.u32 %0, %1;" : "=r"(ret) : "r"(val));
-  return ret;
-}
 
-template <int Val>
-__device__ __forceinline__ constexpr int getMSB() {
+__device__ __forceinline__ constexpr int getMSB(int val) {
   return
-    ((Val >= 1024 && Val < 2048) ? 10 :
-     ((Val >= 512) ? 9 :
-      ((Val >= 256) ? 8 :
-       ((Val >= 128) ? 7 :
-        ((Val >= 64) ? 6 :
-         ((Val >= 32) ? 5 :
-          ((Val >= 16) ? 4 :
-           ((Val >= 8) ? 3 :
-            ((Val >= 4) ? 2 :
-             ((Val >= 2) ? 1 :
-              ((Val == 1) ? 0 : -1)))))))))));
+    ((val >= 1024 && val < 2048) ? 10 :
+     ((val >= 512) ? 9 :
+      ((val >= 256) ? 8 :
+       ((val >= 128) ? 7 :
+        ((val >= 64) ? 6 :
+         ((val >= 32) ? 5 :
+          ((val >= 16) ? 4 :
+           ((val >= 8) ? 3 :
+            ((val >= 4) ? 2 :
+             ((val >= 2) ? 1 :
+              ((val == 1) ? 0 : -1)))))))))));
 }
 
 } }  // namespace

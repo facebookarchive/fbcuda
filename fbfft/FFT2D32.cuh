@@ -1,3 +1,4 @@
+
 // Copyright 2004-present Facebook. All Rights Reserved.
 
 #pragma once
@@ -128,7 +129,7 @@ __device__ inline void swap(T& a, T& b) {
   b = t;
 }
 
-__device__ inline void FFT2(Complex &a, Complex &b)
+__device__ inline void FFT2(Complex& a, Complex& b)
 {
   float t;
   t = a.re(); a.re() += b.re(); b.re() = t - b.re();
@@ -137,13 +138,13 @@ __device__ inline void FFT2(Complex &a, Complex &b)
 
 template<int FFTSize>
 __device__ __forceinline__ void swapHorizontal(Complex& a) {
-  int LogFFTSize = cuda::getMSB<FFTSize>();
+  int LogFFTSize = cuda::getMSB(FFTSize);
   a = shfl(a, reverse(threadIdx.x, LogFFTSize), FFTSize);
 }
 
 template<bool forward>
 __device__ inline void FFT4(
-    Complex &a0, Complex &a1, Complex &a2, Complex &a3) {
+    Complex& a0, Complex& a1, Complex& a2, Complex& a3) {
   FFT2(a0, a2);
   FFT2(a1, a3);
 
@@ -281,20 +282,6 @@ __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
   }
   a[HalfFFTSize / 2] = a[HalfFFTSize / 2].conjugate();
 
-#if 0
-
-  // Prepare horizontal FFT
-  // Twiddles is the same as for 1D but fully data parallel across threadIdx.y
-  FFT1DRegisterTwiddles<FFTSize> roots(true);
-
-  // Horizontal FFT: complex FFTs as complex
-#pragma unroll
-  for (int i = 0; i < HalfFFTSize; ++i) {
-    decimateInFrequency1DWarp<FFTSize>(a[i], roots);
-  }
-
-#else
-
   FFT1DRoots<FFTSize> roots;
   roots.template twiddles<true>();
   // Horizontal FFT: complex FFTs as complex
@@ -303,15 +290,12 @@ __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
     decimateInFrequency1DWarp<FFTSize>(a[i], roots[0]);
   }
 
-#endif
-
   // With a proper DIT / DIF this could disappear and save us some shuffles
   // Horizontal FFT: bit reversal across threads
 #pragma unroll
   for (int i = 0; i < HalfFFTSize; ++i) {
     swapHorizontal<FFTSize>(a[i]);
   }
-
 }
 
 // Only unpack IFFT supported atm
@@ -380,7 +364,7 @@ __device__ __forceinline__ void fbfft2DVertical(
     DeviceTensor<float, BatchDims + 3> complexAsFloat,
     const int padL,
     const int padU) {
-  static_assert(FFTSize % 8 == 0,
+  static_assert(FFTSize == 8 || FFTSize == 16 || FFTSize == 32,
                 "FBFFT supported only for sizes 8, 16, 32 atm");
   static_assert(BatchesPerBlock >= 1, "BatchesPerBlock should be >= 1");
   assert(gridDim.z == 1);
