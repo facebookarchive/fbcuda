@@ -1,7 +1,6 @@
 // Copyright 2004-present Facebook. All Rights Reserved.
 #pragma once
 
-#include "cuda/CudaUtils.cuh"
 #include <math.h>
 
 namespace facebook { namespace cuda {

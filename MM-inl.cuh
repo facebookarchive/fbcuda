@@ -13,11 +13,177 @@ namespace facebook { namespace cuda {
 
 namespace detail {
 
-__device__ __forceinline__ Complex ldg(const Complex* p) {
-  return Complex(__ldg(&(p->re())),
-                 __ldg(&(p->im()))
-                );
+__device__ __forceinline__ constexpr int max(int i, int j) {
+  return (i < j) ? j : i;
 }
+
+__device__ __forceinline__ constexpr int max(int i, int j, int k) {
+  return facebook::cuda::detail::max(facebook::cuda::detail::max(i, j), k);
+}
+
+__device__ __forceinline__ Complex ldg(const Complex* p) {
+  return Complex(__ldg((const float2*)p));
+}
+
+__device__ __forceinline__ void ldg(Complex& c1, Complex&c2, const Complex* p) {
+  const float4 f = __ldg((const float4*)p);
+  c1 = Complex(f.x, f.y);
+  c2 = Complex(f.z, f.w);
+}
+
+template <bool ConjugateTransposeA,
+          bool ConjugateTransposeB,
+          int FFTSize,
+          int FFTElements,
+          int TileI,
+          int TileJ,
+          int TileK,
+          int TileIThreadIdxY,
+          int TileJThreadIdxZ,
+          bool Accumulate>
+__launch_bounds__(32 * 4 * 2, 2) // 128 registers on K40
+__global__ void transposeMMTiledKernelSmall(const DeviceTensor<Complex, 3> A,
+                                            const DeviceTensor<Complex, 3> B,
+                                            DeviceTensor<Complex, 3> C,
+                                            Complex invNorm)
+{
+  const auto xyBase = blockIdx.z * blockDim.x;
+  const auto xy = blockIdx.z * blockDim.x + threadIdx.x;
+  const int numRed = (ConjugateTransposeA) ? A.getSize(0) : A.getSize(1);
+
+  // Conditions must hold for float4 implementation to be valid
+  assert(xy < FFTSize * (FFTSize / 2 + 1));
+  assert(FFTElements == blockDim.x);
+  assert(TileIThreadIdxY == blockDim.y);
+  assert(TileJThreadIdxZ == blockDim.z);
+  assert(numRed % TileK == 0);
+
+  Complex c[TileI][TileJ];
+
+  // for (int i = TileI * blockIdx.x; i < C.getSize(0); i += TileI * gridDim.x) {
+  //   for (int j = TileJ * blockIdx.y; j < C.getSize(1); j += TileJ * gridDim.y) {
+  {
+    {
+      // blockIdx.x/y are the ceils
+      int i = TileI * (threadIdx.y + blockDim.y * blockIdx.x);
+      int j = TileJ * (threadIdx.z + blockDim.z * blockIdx.y);
+
+      // Guard against overflows
+      assert(i + TileI <= C.getSize(0));
+      assert(j + TileJ <= C.getSize(1));
+
+      for (int ii = 0; ii < TileI; ++ii) {
+        for (int jj = 0; jj < TileJ; ++jj) {
+          c[ii][jj] = (Accumulate) ?
+            C[i + ii][j + jj][xy] : Complex(0.0f);
+        }
+      }
+
+      for (int k = 0; k < numRed; k += TileK) {
+        Complex a[TileK][TileI];
+        Complex b[TileK][TileJ];
+
+        __shared__ Complex swap
+          [TileJThreadIdxZ]
+          [TileIThreadIdxY]
+          [facebook::cuda::detail::max(TileI, TileJ, TileK)]
+          [2]
+          [FFTElements];
+        // View float2[2][FFTElements] as float4[FFTElements], let the
+        // compiler worry about the indexing.
+        auto swapViewFloat4 =
+          (float4(*)
+           [TileIThreadIdxY]
+           [facebook::cuda::detail::max(TileI, TileJ, TileK)]
+           [FFTElements])swap;
+
+        // Illustration with blockDim.x == 8
+        // Goal
+        // th  0  1  2  3  4  5  6  7
+        // a  A0 A1 A2 A3 A4 A5 A6 A7
+        // b  B0 B1 B2 B3 B4 B5 B6 B7
+        //
+        // Threads  < blockDim.x / 2 load A0 - A7 into shared float4
+        // Threads >= blockDim.x / 2 load B0 - B7 into shared float4
+        // Actual
+        // s  A0/A1 A2/A3 A4/A5 A6/A7 | B0/B1 B2/B3 B4/B5 B6/B7
+        const auto xdim = (threadIdx.x < blockDim.x / 2) ?
+          xyBase + 2 * threadIdx.x :
+          xyBase + 2 * (threadIdx.x - blockDim.x / 2);
+        for (int kk = 0; kk < TileK; ++kk) {
+          // This statically unrolls for max(TileI, TileJ, TileK) and computes
+          // a base pointer for Threads < blockDim.x / 2 and
+          // Threads >= blockDim.x / 2
+          // If there is imbalance, the pointer computed is nullptr
+          // and the load is not generated.
+          for (int ij = 0;
+               ij < facebook::cuda::detail::max(TileI, TileJ, TileK); ++ij) {
+            const Complex* baseA = (ij >= TileI) ?
+              nullptr :
+              ((!ConjugateTransposeA) ?
+               A[i + ij][k + kk][xdim].data() :
+               A[k + kk][i + ij][xdim].data()) ;
+
+            const Complex* baseB = (ij >= TileJ) ?
+              nullptr :
+              ((!ConjugateTransposeB) ?
+               B[k + kk][j + ij][xdim].data() :
+               B[j + ij][k + kk][xdim].data()) ;
+
+            const Complex* base =
+              (threadIdx.x < blockDim.x / 2) ? baseA : baseB;
+
+            if (base) {
+              swapViewFloat4[threadIdx.z][threadIdx.y][ij][threadIdx.x] =
+                __ldg((const float4*)(base));
+            }
+           }
+
+          for (int ii = 0; ii < TileI; ++ii) {
+            a[kk][ii] = swap[threadIdx.z][threadIdx.y][ii][0][threadIdx.x];
+          }
+          for (int jj = 0; jj < TileJ; ++jj) {
+            b[kk][jj] = swap[threadIdx.z][threadIdx.y][jj][1][threadIdx.x];
+           }
+        }
+
+        if (ConjugateTransposeA) {
+          for (int kk = 0; kk < TileK; ++kk) {
+            for (int ii = 0; ii < TileI; ++ii) {
+              a[kk][ii] = a[kk][ii].conjugate();
+            }
+          }
+        }
+        if (ConjugateTransposeB) {
+          for (int kk = 0; kk < TileK; ++kk) {
+            for (int jj = 0; jj < TileJ; ++jj) {
+              b[kk][jj] = b[kk][jj].conjugate();
+            }
+          }
+        }
+
+        for (int kk = 0; kk < TileK; ++kk) {
+          for (int jj = 0; jj < TileJ; ++jj) {
+            for (int ii = 0; ii < TileI; ++ii) {
+              c[ii][jj] += a[kk][ii] * b[kk][jj];
+             }
+           }
+         }
+       }
+
+      // Actual
+      // c  C0 C2 C4 C6 C1 C3 C5 C7
+      for (int ii = 0; ii < TileI; ++ii) {
+        for (int jj = 0; jj < TileJ; ++jj) {
+          c[ii][jj].re() *= invNorm.re();
+          c[ii][jj].im() *= invNorm.re();
+          *(C[i + ii][j + jj][xy].dataAs<float2>()) = (float2)(c[ii][jj]);
+        }
+      }
+     }
+   }
+ }
+
 
 // By construction, x * y is contiguous.
 // doall xy
@@ -185,7 +351,7 @@ __global__ void transposeMMTiledKernel(const DeviceTensor<Complex, 3> A,
                  ++jj) {
               c[ii][jj].re() *= invNorm.re();
               c[ii][jj].im() *= invNorm.re();
-              C[i + ii][j + jj][xy] = c[ii][jj];
+              *(C[i + ii][j + jj][xy].dataAs<float2>()) = (float2)(c[ii][jj]);
             }
           }
         }
@@ -256,8 +422,10 @@ void transposeMM(DeviceTensor<float, Dim>& A,
     const int numRed =                                                  \
       (ConjugateTransposeA) ? dcA.getSize(0) : dcA.getSize(1);          \
     bool StaticUnrollReduction = (numRed % ReductionUnroll == 0);       \
-    count++;                                                            \
     if (debug) {                                                        \
+      LOG(INFO) << StaticUnrollA << " " << StaticUnrollB << " "         \
+                << StaticUnrollCI << " " << StaticUnrollCJ << " "       \
+                << StaticUnrollXY << " " << StaticUnrollReduction;      \
       LOG(INFO) << StaticUnrollA << " " << StaticUnrollB << " "         \
                 << StaticUnrollCI << " " << StaticUnrollCJ << " "       \
                 << StaticUnrollXY << " " << StaticUnrollReduction;      \
@@ -265,7 +433,12 @@ void transposeMM(DeviceTensor<float, Dim>& A,
     if (StaticUnrollA && StaticUnrollB && StaticUnrollCI &&             \
         StaticUnrollCJ && StaticUnrollXY && StaticUnrollReduction) {    \
       if (debug) {                                                      \
-        LOG(INFO) << "Count: " << count;                                \
+        LOG(INFO) << "Params: " << C_J_Unroll << " " <<                 \
+          C_XY_Placement_ThreadIdx_X << " " <<                          \
+          C_XY_Placement_BlockIdx_Z << " " <<                           \
+          C_I_Tile << " " <<                                            \
+          C_J_Tile << " " <<                                            \
+          ReductionUnroll;                                              \
       }                                                                 \
       /* Needed for proper loading of data */                           \
       CHECK_LE(C_I_Tile, C_J_Unroll);                                   \
@@ -293,7 +466,85 @@ void transposeMM(DeviceTensor<float, Dim>& A,
     }                                                                   \
   }
 
-  int count = 0;
+
+#define INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                     \
+  TILEI, TILEJ, TILEK, TILEITHY, TILEJTHZ, FFTELEMENTS)                 \
+  {                                                                     \
+    constexpr int TileI = TILEI;                                        \
+    constexpr int TileJ = TILEJ;                                        \
+    constexpr int TileK = TILEK;                                        \
+    constexpr int TileIThreadIdxY = TILEITHY;                           \
+    constexpr int TileJThreadIdxZ = TILEJTHZ;                           \
+    constexpr int FFTElements = FFTELEMENTS;                            \
+    if (dcC.getSize(0) % (TileI * TileIThreadIdxY) == 0 &&              \
+        dcC.getSize(1) % (TileJ * TileJThreadIdxZ) == 0 &&              \
+        (                                                               \
+          (!ConjugateTransposeA && ((dcA.getSize(1) % TileK) == 0)) ||  \
+          ( ConjugateTransposeA && ((dcA.getSize(0) % TileK) == 0))     \
+        )                                                          &&   \
+        (FFTSize * (FFTSize / 2 + 1)) % (2 * FFTElements) == 0) {       \
+      if (debug) {                                                      \
+        LOG(INFO) << " TileI = " << TileI                               \
+                  << " TileJ = " << TileJ                               \
+                  << " TileK = " << TileK                               \
+                  << " TileIThreadIdxY = " << TileIThreadIdxY           \
+                  << " TileJThreadIdxZ = " << TileJThreadIdxZ           \
+                  << " FFTElements = " << FFTElements;                  \
+      }                                                                 \
+      static_assert(FFTSize % FFTElements == 0,                         \
+                    "float4 reads requires FFTSize % FFTElements == 0");\
+      dim3 blocks(ceil(dcC.getSize(0), TileI * TileIThreadIdxY),        \
+                  ceil(dcC.getSize(1), TileJ * TileJThreadIdxZ),        \
+                  ceil(FFTSize * (FFTSize / 2 + 1), FFTElements));      \
+      dim3 threads(FFTElements, TileIThreadIdxY, TileJThreadIdxZ);      \
+      detail::transposeMMTiledKernelSmall<ConjugateTransposeA,          \
+                                          ConjugateTransposeB,          \
+                                          FFTSize,                      \
+                                          FFTElements,                  \
+                                          TileI,                        \
+                                          TileJ,                        \
+                                          TileK,                        \
+                                          TileIThreadIdxY,              \
+                                          TileJThreadIdxZ,              \
+                                          Accumulate>                   \
+        <<<blocks, threads, 0, s>>> (dcA, dcB, dcC, Complex(invNorm));  \
+      return;                                                           \
+    }                                                                   \
+  }
+
+// Always look permutations of (TILEI, TILEJ, TILEK) and (TILEITHY, TILEJTHZ)
+#define INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(                          \
+  TILEI, TILEJ, TILEK, TILEITHY, TILEJTHZ, FFTELEMENTS)                 \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEI, TILEJ, TILEK, TILEITHY, TILEJTHZ, FFTELEMENTS);              \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEI, TILEJ, TILEK, TILEJTHZ, TILEITHY, FFTELEMENTS);              \
+                                                                        \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEI, TILEK, TILEJ, TILEITHY, TILEJTHZ, FFTELEMENTS);              \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEI, TILEK, TILEJ, TILEJTHZ, TILEITHY, FFTELEMENTS);              \
+                                                                        \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEJ, TILEI, TILEK, TILEITHY, TILEJTHZ, FFTELEMENTS);              \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEJ, TILEI, TILEK, TILEJTHZ, TILEITHY, FFTELEMENTS);              \
+                                                                        \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEJ, TILEK, TILEI, TILEITHY, TILEJTHZ, FFTELEMENTS);              \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEJ, TILEK, TILEI, TILEJTHZ, TILEITHY, FFTELEMENTS);              \
+                                                                        \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEK, TILEI, TILEJ, TILEITHY, TILEJTHZ, FFTELEMENTS);              \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEK, TILEI, TILEJ, TILEJTHZ, TILEITHY, FFTELEMENTS);              \
+                                                                        \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEK, TILEJ, TILEI, TILEITHY, TILEJTHZ, FFTELEMENTS);              \
+  INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED_IMPL(                           \
+    TILEK, TILEJ, TILEI, TILEJTHZ, TILEITHY, FFTELEMENTS);
+
   bool debug = false;
   if (debug) {
     LOG(INFO) << "ConjugateTransposeA: " << ConjugateTransposeA
@@ -312,90 +563,104 @@ void transposeMM(DeviceTensor<float, Dim>& A,
   // TODO: Add more instantiations to cover use cases properly
   if (dcA.getSize(2) == 3 * 4) {
   } else if (dcA.getSize(2) == 5 * 8) {
+    INSTANTIATE_FBMM_FULLY_UNROLLED(32,  6, 5, /* */ 8, 2, 2);
+    INSTANTIATE_FBMM_FULLY_UNROLLED(16,  8, 5, /* */ 8, 2, 2);
+    INSTANTIATE_FBMM_FULLY_UNROLLED(12,  8, 5, /* */ 8, 2, 2);
+    INSTANTIATE_FBMM_FULLY_UNROLLED(8,  8, 5, /* */ 8, 2, 2);
+
+    constexpr int FFTSize = 8;
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 4, 4, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 4, 2, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 4, 1, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 2, 2, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 2, 1, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 1, 1, 4);
+
+    // InputPlane = 3*k (RGB input mostly)
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 4, 4, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 4, 2, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 4, 1, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 2, 2, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 2, 1, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 1, 1, 4);
+
+    // Batch size = 1
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 4, 4, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 4, 2, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 4, 1, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 2, 2, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 2, 1, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 1, 1, 4);
+
+    // Fallback
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(2, 2, 2, 1, 1, 4);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 1, 1, 1, 1, 4);
   } else if (dcA.getSize(2) == 9 * 16) {
-    // Imagenet 4-GPU model parallel 128x256x96
-    INSTANTIATE_FBMM_FULLY_UNROLLED(128, 8, 6, /* */ 8, 2, 2);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(96,  8, 6, /* */ 8, 2, 2);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(64, 12, 6, /* */ 8, 2, 2);
-    // Imagenet 4-GPU model parallel 128x96x96
     INSTANTIATE_FBMM_FULLY_UNROLLED(16, 12, 6, /* */ 8, 2, 2);
     INSTANTIATE_FBMM_FULLY_UNROLLED(12, 12, 6, /* */ 8, 2, 2);
-    // TODO: VGG first layer, pretty bad use case for this fbmm because
-    // of the 3 dimension in 64 x 3 x 64
+    INSTANTIATE_FBMM_FULLY_UNROLLED(8, 12, 6, /* */ 8, 2, 2);
 
-    /////////////////////////////////////////////////////////////
-    // Duplicate for unroll dimension of size 1 (batch size == 1)
-    /////////////////////////////////////////////////////////////
+    constexpr int FFTSize = 16;
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 4, 2, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 4, 1, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 2, 2, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 2, 1, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 1, 1, 8);
 
-    // Imagenet 4-GPU model parallel 128x256x96
-    INSTANTIATE_FBMM_FULLY_UNROLLED(128, 8, 6, /* */ 8, 2, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(96,  8, 6, /* */ 8, 2, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(64, 12, 6, /* */ 8, 2, 1);
-    // Imagenet 4-GPU model parallel 128x96x96
-    INSTANTIATE_FBMM_FULLY_UNROLLED(16, 12, 6, /* */ 8, 2, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(12, 12, 6, /* */ 8, 2, 1);
-    // TODO: VGG first layer, pretty bad use case for this fbmm because
-    // of the 3 dimension in 64 x 3 x 64
+    // InputPlane = 3*k (RGB input mostly)
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 4, 2, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 4, 1, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 2, 2, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 2, 1, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 1, 1, 8);
+
+    // Batch size = 1
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 4, 2, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 4, 1, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 2, 2, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 2, 1, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 1, 1, 8);
+
+    // Fallback
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(2, 2, 2, 1, 1, 8);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 1, 1, 1, 1, 8);
   } else if (dcA.getSize(2) == 17 * 32) {
-    // Imagenet 4-GPU model parallel 128x24x64
     INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 8, 2, 2);
     INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 4, 2, 2);
-    // VGG first layer, pretty bad use case for this fbmm because
-    // of the 3 dimension in 64 x 3 x 64
-    INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 3, 2, 2);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 3, 2, 2);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 2, 3, 2);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 2, 3, 2);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 2, 2, 3);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 2, 2, 3);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(1, 16, 17, /* */ 1, 2, 2);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(1, 16, 17, /* */ 1, 3, 2);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(1, 16, 17, /* */ 1, 2, 3);
 
-    /////////////////////////////////////////////////////////////
-    // Duplicate for unroll dimension of size 1 (batch size == 1)
-    /////////////////////////////////////////////////////////////
+    constexpr int FFTSize = 32;
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 2, 2, 16);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(4, 4, 4, 1, 1, 16);
 
-    // Imagenet 4-GPU model parallel 128x24x64
-    INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 8, 2, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 4, 2, 1);
-    // VGG first layer, pretty bad use case for this fbmm because
-    // of the 3 dimension in 64 x 3 x 64
-    INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 3, 2, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 3, 2, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 2, 3, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 2, 3, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(8, 16, 17, /* */ 2, 2, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(4, 16, 17, /* */ 2, 2, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(1, 16, 17, /* */ 1, 2, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(1, 16, 17, /* */ 1, 3, 1);
-    INSTANTIATE_FBMM_FULLY_UNROLLED(1, 16, 17, /* */ 1, 2, 1);
+    // InputPlane = 3*k (RGB input mostly)
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 1, 4, 16);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 1, 2, 16);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(3, 4, 4, 1, 1, 16);
+
+    // Batch size = 1
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 1, 4, 16);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 1, 2, 16);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 4, 4, 1, 1, 16);
+
+    // Fallback
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(2, 2, 2, 1, 1, 16);
+    INSTANTIATE_FBMM_SMALL_FULLY_UNROLLED(1, 1, 1, 1, 1, 16);
   } else if (dcA.getSize(2) == 33 * 64) {
   } else if (dcA.getSize(2) == 65 * 128) {
   }
 
   // Fallback cases
   if (debug) {
-    LOG(WARNING) << "Fallback case, performance will be bad";
-  }
-  INSTANTIATE_FBMM_FULLY_UNROLLED(8, 8, 4, /* */ 8, 2, 2);
-  INSTANTIATE_FBMM_FULLY_UNROLLED(4, 8, 2, /* */ 4, 2, 2);
-  INSTANTIATE_FBMM_FULLY_UNROLLED(4, 4, 1, /* */ 4, 2, 2);
-  INSTANTIATE_FBMM_FULLY_UNROLLED(8, 8, 4, /* */ 8, 2, 1);
-  INSTANTIATE_FBMM_FULLY_UNROLLED(4, 8, 2, /* */ 4, 2, 1);
-  INSTANTIATE_FBMM_FULLY_UNROLLED(4, 4, 1, /* */ 4, 2, 1);
-
-  if (debug) {
     LOG(WARNING) << "Unspecialized case, performance will be very bad";
   }
 
   // Default case, performance wil most likely be bad if we get here
-#define C_I_Tile 8
+#define C_I_Tile 4
 #define C_J_Tile 2
 #define ReductionUnroll 1
-#define C_J_Unroll 16
-#define C_XY_Placement_ThreadIdx_X 12
-#define C_XY_Placement_BlockIdx_Z 6
+#define C_J_Unroll 4
+#define C_XY_Placement_ThreadIdx_X 4
+#define C_XY_Placement_BlockIdx_Z 1
 
   dim3 blocks(ceil(dcC.getSize(0), C_I_Tile),
               ceil(dcC.getSize(1), C_J_Unroll * C_J_Tile),
