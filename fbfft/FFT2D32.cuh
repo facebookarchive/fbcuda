@@ -7,8 +7,11 @@
 // compile to immediate instructions.
 // 2008. Volkov and Kazian, Fitting FFT onto the G80 Architecture
 //
-// Write our own using the same Hermitian strategy as in:
+// Write our own using a mix of Volkov for vertical FFTs and
 // [1412.7580] Fast Convolutional Nets With fbfft
+// for horizontal FFTs.
+// This trades off shared memory usage for shuffle instructions in the
+// horizontal step.
 
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
@@ -28,108 +31,9 @@ namespace facebook { namespace cuda { namespace fbfft {
 
 namespace detail {
 
-#define COS_01_PI_04   0x1.6A09E6p-1f
-#define COS_01_PI_08   0x1.D906BCp-1f
-#define SIN_01_PI_08   0x1.87DE2Ap-2f
+template< int > __device__ inline int bitReversal(int);
 
-#define COS_00_PI_04   0x1.000000p+0f
-#define COS_01_PI_04   0x1.6A09E6p-1f
-#define COS_02_PI_04   0x0.000000p+0f
-#define COS_03_PI_04  -0x1.6A09E6p-1f
-#define SIN_00_PI_04   0x0.000000p+0f
-#define SIN_01_PI_04   0x1.6A09E6p-1f
-#define SIN_02_PI_04   0x1.000000p+0f
-#define SIN_03_PI_04   0x1.6A09E6p-1f
-
-#define COS_00_PI_08   0x1.000000p+0f
-#define COS_01_PI_08   0x1.D906BCp-1f
-#define COS_02_PI_08   0x1.6A09E6p-1f
-#define COS_03_PI_08   0x1.87DE2Ap-2f
-#define COS_04_PI_08   0x0.000000p+0f
-#define COS_05_PI_08  -0x1.87DE2Ap-2f
-#define COS_06_PI_08  -0x1.6A09E6p-1f
-#define COS_07_PI_08  -0x1.D906BCp-1f
-#define SIN_00_PI_08   0x0.000000p+0f
-#define SIN_01_PI_08   0x1.87DE2Ap-2f
-#define SIN_02_PI_08   0x1.6A09E6p-1f
-#define SIN_03_PI_08   0x1.D906BCp-1f
-#define SIN_04_PI_08   0x1.000000p+0f
-#define SIN_05_PI_08   0x1.D906BCp-1f
-#define SIN_06_PI_08   0x1.6A09E6p-1f
-#define SIN_07_PI_08   0x1.87DE2Ap-2f
-
-#define COS_00_PI_16   0x1.000000p+0f
-#define COS_01_PI_16   0x1.F6297Cp-1f
-#define COS_02_PI_16   0x1.D906BCp-1f
-#define COS_03_PI_16   0x1.A9B662p-1f
-#define COS_04_PI_16   0x1.6A09E6p-1f
-#define COS_05_PI_16   0x1.1C73B4p-1f
-#define COS_06_PI_16   0x1.87DE2Ap-2f
-#define COS_07_PI_16   0x1.8F8B84p-3f
-#define COS_08_PI_16   0x0.000000p+0f
-#define COS_09_PI_16  -0x1.8F8B84p-3f
-#define COS_10_PI_16  -0x1.87DE2Ap-2f
-#define COS_11_PI_16  -0x1.1C73B4p-1f
-#define COS_12_PI_16  -0x1.6A09E6p-1f
-#define COS_13_PI_16  -0x1.A9B662p-1f
-#define COS_14_PI_16  -0x1.D906BCp-1f
-#define COS_15_PI_16  -0x1.F6297Cp-1f
-#define SIN_00_PI_16   0x0.000000p+0f
-#define SIN_01_PI_16   0x1.8F8B84p-3f
-#define SIN_02_PI_16   0x1.87DE2Ap-2f
-#define SIN_03_PI_16   0x1.1C73B4p-1f
-#define SIN_04_PI_16   0x1.6A09E6p-1f
-#define SIN_05_PI_16   0x1.A9B662p-1f
-#define SIN_06_PI_16   0x1.D906BCp-1f
-#define SIN_07_PI_16   0x1.F6297Cp-1f
-#define SIN_08_PI_16   0x1.000000p+0f
-#define SIN_09_PI_16   0x1.F6297Cp-1f
-#define SIN_10_PI_16   0x1.D906BCp-1f
-#define SIN_11_PI_16   0x1.A9B662p-1f
-#define SIN_12_PI_16   0x1.6A09E6p-1f
-#define SIN_13_PI_16   0x1.1C73B4p-1f
-#define SIN_14_PI_16   0x1.87DE2Ap-2f
-#define SIN_15_PI_16   0x1.8F8B84p-3f
-
-//////////////////////////////////////////////////////////////////////////////
-
-#define exp_01_02  Complex(            1,             0)
-#define exp_01_04  Complex(            0,            -1)
-
-#define exp_01_08  Complex( COS_01_PI_04, -COS_01_PI_04)
-#define exp_02_08  Complex(            0,            -1) /* exp_01_04 */
-#define exp_03_08  Complex(-COS_01_PI_04, -COS_01_PI_04)
-
-#define exp_01_16  Complex( COS_01_PI_08, -SIN_01_PI_08)
-#define exp_02_16  Complex( COS_01_PI_04, -COS_01_PI_04) /* exp_01_08 */
-#define exp_03_16  Complex( SIN_01_PI_08, -COS_01_PI_08)
-#define exp_04_16  Complex(            0,            -1) /* exp_01_04 */
-#define exp_05_16  Complex(-SIN_01_PI_08, -COS_01_PI_08)
-#define exp_06_16  Complex(-COS_01_PI_04, -COS_01_PI_04) /* exp_03_08 */
-#define exp_07_16  Complex(-COS_01_PI_08, -SIN_01_PI_08)
-
-#define exp_08_16  Complex(            1,             0) /* exp_01_02 */
-#define exp_09_16  Complex(-COS_01_PI_08,  SIN_01_PI_08)
-
-#define exp_01_32  Complex( COS_01_PI_16, -SIN_01_PI_16)
-#define exp_02_32  Complex( COS_01_PI_08, -SIN_01_PI_08) /* exp_01_16 */
-#define exp_03_32  Complex( COS_03_PI_16, -SIN_03_PI_16)
-#define exp_04_32  Complex( COS_01_PI_04, -COS_01_PI_04) /* exp_01_08 */
-#define exp_05_32  Complex( SIN_03_PI_16, -COS_03_PI_16)
-#define exp_06_32  Complex( SIN_01_PI_08, -COS_01_PI_08) /* exp_03_16 */
-#define exp_07_32  Complex( SIN_01_PI_16, -COS_01_PI_16)
-#define exp_08_32  Complex(            0,            -1) /* exp_01_04 */
-#define exp_09_32  Complex(-SIN_01_PI_16, -COS_01_PI_16)
-#define exp_10_32  Complex(-SIN_01_PI_08, -COS_01_PI_08) /* exp_05_16 */
-#define exp_11_32  Complex(-SIN_03_PI_16, -COS_03_PI_16)
-#define exp_12_32  Complex(-COS_01_PI_04, -COS_01_PI_04) /* exp_03_08 */
-#define exp_13_32  Complex(-COS_03_PI_16, -SIN_03_PI_16)
-#define exp_14_32  Complex(-COS_01_PI_08, -SIN_01_PI_08) /* exp_07_16 */
-#define exp_15_32  Complex(-COS_01_PI_16, -SIN_01_PI_16)
-
-template< int > __device__ inline int rev(int);
-
-template<> __device__ inline int rev<8>(int i)
+template<> __device__ inline int bitReversal<8>(int i)
 {
   switch (i) {
     case  0:  return 0;
@@ -144,7 +48,7 @@ template<> __device__ inline int rev<8>(int i)
   }
 }
 
-template<> __device__ inline int rev<16>(int i)
+template<> __device__ inline int bitReversal<16>(int i)
 {
   switch (i) {
     case  0:  return 0;
@@ -167,7 +71,7 @@ template<> __device__ inline int rev<16>(int i)
   }
 }
 
-template<> __device__ inline int rev<32>(int i)
+template<> __device__ inline int bitReversal<32>(int i)
 {
   switch (i) {
     case  0:  return 0;
@@ -206,422 +110,198 @@ template<> __device__ inline int rev<32>(int i)
   }
 }
 
-static __device__ inline void FFT2(Complex &a, Complex &b)
+__device__ inline void FFT2(Complex &a, Complex &b)
 {
   float t;
   t = a.re(); a.re() += b.re(); b.re() = t - b.re();
   t = a.im(); a.im() += b.im(); b.im() = t - b.im();
 }
 
-static __device__ inline void swap(Complex& a, Complex& b) {
+__device__ inline void swap(Complex& a, Complex& b) {
   Complex t = a;
   a = b;
   b = t;
 }
 
-static __device__ inline void FFT4(
+template<int FFTSize>
+__device__ __forceinline__ void swapHorizontal(Complex& a) {
+  int LogFFTSize = cuda::getMSB<FFTSize>();
+  a = shfl(a, reverse(threadIdx.x, LogFFTSize), FFTSize);
+}
+
+__device__ inline void FFT4(
     Complex &a0, Complex &a1, Complex &a2, Complex &a3) {
   FFT2(a0, a2);
   FFT2(a1, a3);
 
-  a3 = a3 * exp_01_04;
+  a3 = a3 * FBFFT32_CEXPF_G.conjugate(); // e(2pi / 32 . (-2 . 8))
 
   FFT2(a0, a1);
   FFT2(a2, a3);
 }
 
-static __device__ inline void FFT8(Complex* a)
+__device__ inline void FFT8(Complex* a)
 {
 #pragma unroll
   for (int i = 0; i < 4; ++i) {
     FFT2(a[i], a[4 + i]);
   }
 
-  a[5] *= exp_01_08;
-  a[6] *= exp_02_08;
-  a[7] *= exp_03_08;
+  a[5] *= FBFFT32_CEXPF_8.conjugate(); // e(-2pi / 8 .1)
+  a[6] *= FBFFT32_CEXPF_G.conjugate(); // e(-2pi / 8 . 2)
+  a[7] *= FBFFT32_CEXPF_O.conjugate(); // e(-2pi / 8 . 3)
 
   FFT4(a[ 0], a[ 1], a[ 2], a[ 3]);
   FFT4(a[ 4], a[ 5], a[ 6], a[ 7]);
 }
 
-static __device__ inline void FFT16(Complex* a)
+__device__ inline void FFT16(Complex* a)
 {
 #pragma unroll
   for (int i = 0; i < 8; ++i) {
     FFT2(a[i], a[8 + i]);
   }
 
-  a[9]  *= exp_01_16;
-  a[10] *= exp_02_16;
-  a[11] *= exp_03_16;
-  a[12] *= exp_04_16;
-  a[13] *= exp_05_16;
-  a[14] *= exp_06_16;
-  a[15] *= exp_07_16;
+  a[9]  *= FBFFT32_CEXPF_4.conjugate(); // e(-2pi / 16 . 1)
+  a[10] *= FBFFT32_CEXPF_8.conjugate(); // e(-2pi / 16 . 2)
+  a[11] *= FBFFT32_CEXPF_C.conjugate(); // e(-2pi / 16 . 3)
+  a[12] *= FBFFT32_CEXPF_G.conjugate(); // e(-2pi / 16 . 4)
+  a[13] *= FBFFT32_CEXPF_K.conjugate(); // e(-2pi / 16 . 5)
+  a[14] *= FBFFT32_CEXPF_O.conjugate(); // e(-2pi / 16 . 6)
+  a[15] *= FBFFT32_CEXPF_S.conjugate(); // e(-2pi / 16 . 7)
 
   FFT8(a);
   FFT8(a + 8);
 }
 
 
-static __device__ inline void FFT32(Complex* a)
+__device__ inline void FFT32(Complex* a)
 {
 #pragma unroll
   for (int i = 0; i < 16; ++i) {
     FFT2(a[i], a[16 + i]);
   }
 
-  a[17] *= exp_01_32;
-  a[18] *= exp_02_32;
-  a[19] *= exp_03_32;
-  a[20] *= exp_04_32;
-  a[21] *= exp_05_32;
-  a[22] *= exp_06_32;
-  a[23] *= exp_07_32;
-  a[24] *= exp_08_32;
-  a[25] *= exp_09_32;
-  a[26] *= exp_10_32;
-  a[27] *= exp_11_32;
-  a[28] *= exp_12_32;
-  a[29] *= exp_13_32;
-  a[30] *= exp_14_32;
-  a[31] *= exp_15_32;
+  a[17] *= FBFFT32_CEXPF_2.conjugate(); // e(-2pi / 32 . 1)
+  a[18] *= FBFFT32_CEXPF_4.conjugate(); // e(-2pi / 32 . 2)
+  a[19] *= FBFFT32_CEXPF_6.conjugate(); // e(-2pi / 32 . 3)
+  a[20] *= FBFFT32_CEXPF_8.conjugate(); // e(-2pi / 32 . 4)
+  a[21] *= FBFFT32_CEXPF_A.conjugate(); // e(-2pi / 32 . 5)
+  a[22] *= FBFFT32_CEXPF_C.conjugate(); // e(-2pi / 32 . 6)
+  a[23] *= FBFFT32_CEXPF_E.conjugate(); // e(-2pi / 32 . 7)
+  a[24] *= FBFFT32_CEXPF_G.conjugate(); // e(-2pi / 32 . 8)
+  a[25] *= FBFFT32_CEXPF_I.conjugate(); // e(-2pi / 32 . 9)
+  a[26] *= FBFFT32_CEXPF_K.conjugate(); // e(-2pi / 32 . 10)
+  a[27] *= FBFFT32_CEXPF_M.conjugate(); // e(-2pi / 32 . 11)
+  a[28] *= FBFFT32_CEXPF_O.conjugate(); // e(-2pi / 32 . 12)
+  a[29] *= FBFFT32_CEXPF_Q.conjugate(); // e(-2pi / 32 . 13)
+  a[30] *= FBFFT32_CEXPF_S.conjugate(); // e(-2pi / 32 . 14)
+  a[31] *= FBFFT32_CEXPF_U.conjugate(); // e(-2pi / 32 . 15)
 
   FFT16(a);
   FFT16(a + 16);
 }
 
 template<int N>
-static __device__ inline void fft2dCore(Complex *a);
+__device__ inline void fft2dVertical(Complex *a);
 
-template<> void fft2dCore<8>(Complex* a) {
+template<> void fft2dVertical<8>(Complex* a) {
   FFT8(a);
 }
 
-template<> void fft2dCore<16>(Complex* a) {
+template<> void fft2dVertical<16>(Complex* a) {
   FFT16(a);
 }
 
-template<> void fft2dCore<32>(Complex* a) {
+template<> void fft2dVertical<32>(Complex* a) {
   FFT32(a);
-}
-
-template <int FFTSize>
-__device__ inline void inefficientTranspose(
-    Complex* a,
-    // pass shared memory buffer or lose 2x perf
-    float (*sharedMem)[FFTSize][FFTSize + 1]) {
-
-  for (int i = 0 ; i < FFTSize; ++i) {
-    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].re();
-  }
-  __syncthreads();
-  for (int i = 0 ; i < FFTSize; ++i) {
-    a[i].re() = sharedMem[threadIdx.y][threadIdx.x][i];
-  }
-  __syncthreads();
-  for (int i = 0 ; i < FFTSize; ++i) {
-    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].im();
-  }
-  __syncthreads();
-  for (int i = 0 ; i < FFTSize; ++i) {
-    a[i].im() = sharedMem[threadIdx.y][threadIdx.x][i];
-  }
-}
-
-
-// TODO: Partial specialization, constexpr
-template <int BatchesPerBlock, int FFTSize, bool InverseFFT>
-__device__ inline void inefficientTranspose(Complex* a);
-
-///////////////////// FFT Transpose Specializations ///////////////////
-
-// TODO: Partial specialization, constexpr
-template <>
-__device__ inline void inefficientTranspose<2, 32, false>(Complex* a) {
-  __shared__ float sharedMem[1][32 / 2 + 1][32 + 1];
-
-  assert(blockDim.y == 2); // BatchesPerBlock 2
-
-  if (threadIdx.y == 0) {
-    for (int i = 0 ; i < 32 / 2 + 1; ++i) {
-      sharedMem[0][i][threadIdx.x] = a[i].re();
-    }
-    if (threadIdx.x < 32 / 2 + 1) {
-      for (int i = 0 ; i < 32; ++i) {
-        a[i].re() = sharedMem[0][threadIdx.x][i];
-      }
-    }
-  }
-  __syncthreads();
-  if (threadIdx.y == 1) {
-    for (int i = 0 ; i < 32 / 2 + 1; ++i) {
-      sharedMem[0][i][threadIdx.x] = a[i].re();
-    }
-    if (threadIdx.x < 32 / 2 + 1) {
-      for (int i = 0 ; i < 32; ++i) {
-        a[i].re() = sharedMem[0][threadIdx.x][i];
-      }
-    }
-  }
-  __syncthreads();
-  if (threadIdx.y == 0) {
-    for (int i = 0 ; i < 32 / 2 + 1; ++i) {
-      sharedMem[0][i][threadIdx.x] = a[i].im();
-    }
-    if (threadIdx.x < 32 / 2 + 1) {
-      for (int i = 0 ; i < 32; ++i) {
-        a[i].im() = sharedMem[0][threadIdx.x][i];
-      }
-    }
-  }
-  __syncthreads();
-  if (threadIdx.y == 1) {
-    for (int i = 0 ; i < 32 / 2 + 1; ++i) {
-      sharedMem[0][i][threadIdx.x] = a[i].im();
-    }
-    if (threadIdx.x < 32 / 2 + 1) {
-      for (int i = 0 ; i < 32; ++i) {
-        a[i].im() = sharedMem[0][threadIdx.x][i];
-      }
-    }
-  }
-}
-
-
-// TODO: Partial specialization, constexpr
-template <>
-__device__ inline void inefficientTranspose<4, 16, false>(Complex* a) {
-  __shared__ float sharedMem[4][16 / 2 + 1][16 + 1];
-
-  for (int i = 0 ; i < 16 / 2 + 1; ++i) {
-    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].re();
-  }
-  if (threadIdx.x < 16 / 2 + 1) {
-    for (int i = 0 ; i < 16; ++i) {
-      a[i].re() = sharedMem[threadIdx.y][threadIdx.x][i];
-    }
-  }
-  __syncthreads();
-  for (int i = 0 ; i < 16 / 2 + 1; ++i) {
-    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].im();
-  }
-  if (threadIdx.x < 16 / 2 + 1) {
-    for (int i = 0 ; i < 16; ++i) {
-      a[i].im() = sharedMem[threadIdx.y][threadIdx.x][i];
-    }
-  }
-}
-
-
-// TODO: Partial specialization, constexpr
-template <>
-__device__ inline void inefficientTranspose<16, 8, false>(Complex* a) {
-  __shared__ float sharedMem[16][8][8 + 1];
-
-  for (int i = 0 ; i < 8 / 2 + 1; ++i) {
-    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].re();
-  }
-  if (threadIdx.x < 8 / 2 + 1) {
-    for (int i = 0 ; i < 8; ++i) {
-      a[i].re() = sharedMem[threadIdx.y][threadIdx.x][i];
-    }
-  }
-  __syncthreads();
-  for (int i = 0 ; i < 8 / 2 + 1; ++i) {
-    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].im();
-  }
-  if (threadIdx.x < 8 / 2 + 1) {
-    for (int i = 0 ; i < 8; ++i) {
-      a[i].im() = sharedMem[threadIdx.y][threadIdx.x][i];
-    }
-  }
-}
-
-///////////////////// IFFT Transpose Specializations ///////////////////
-
-// TODO: Partial specialization, constexpr
-template <>
-__device__ inline void inefficientTranspose<2, 32, true>(Complex* a) {
-  __shared__ float sharedMem[1][32][32 + 1];
-
-  assert(blockDim.y == 2); // BatchesPerBlock 2
-
-  if (threadIdx.y == 0) {
-    for (int i = 0 ; i < 32; ++i) {
-      sharedMem[0][i][threadIdx.x] = a[i].re();
-    }
-    if (threadIdx.x < 32) {
-      for (int i = 0 ; i < 32; ++i) {
-        a[i].re() = sharedMem[0][threadIdx.x][i];
-      }
-    }
-  }
-  __syncthreads();
-  if (threadIdx.y == 1) {
-    for (int i = 0 ; i < 32; ++i) {
-      sharedMem[0][i][threadIdx.x] = a[i].re();
-    }
-    if (threadIdx.x < 32) {
-      for (int i = 0 ; i < 32; ++i) {
-        a[i].re() = sharedMem[0][threadIdx.x][i];
-      }
-    }
-  }
-  __syncthreads();
-  if (threadIdx.y == 0) {
-    for (int i = 0 ; i < 32; ++i) {
-      sharedMem[0][i][threadIdx.x] = a[i].im();
-    }
-    if (threadIdx.x < 32) {
-      for (int i = 0 ; i < 32; ++i) {
-        a[i].im() = sharedMem[0][threadIdx.x][i];
-      }
-    }
-  }
-  __syncthreads();
-  if (threadIdx.y == 1) {
-    for (int i = 0 ; i < 32; ++i) {
-      sharedMem[0][i][threadIdx.x] = a[i].im();
-    }
-    if (threadIdx.x < 32) {
-      for (int i = 0 ; i < 32; ++i) {
-        a[i].im() = sharedMem[0][threadIdx.x][i];
-      }
-    }
-  }
-}
-
-
-// TODO: Partial specialization, constexpr
-template <>
-  __device__ inline void inefficientTranspose<4, 16, true>(Complex* a) {
-  __shared__ float sharedMem[4][16][16 + 1];
-
-  for (int i = 0 ; i < 16; ++i) {
-    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].re();
-  }
-  for (int i = 0 ; i < 16; ++i) {
-    a[i].re() = sharedMem[threadIdx.y][threadIdx.x][i];
-  }
-  __syncthreads();
-  for (int i = 0 ; i < 16; ++i) {
-    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].im();
-  }
-  for (int i = 0 ; i < 16; ++i) {
-    a[i].im() = sharedMem[threadIdx.y][threadIdx.x][i];
-  }
-}
-
-// TODO: Partial specialization, constexpr
-template <>
-__device__ inline void inefficientTranspose<16, 8, true>(Complex* a) {
-  __shared__ float sharedMem[16][8][8 + 1];
-
-  for (int i = 0 ; i < 8; ++i) {
-    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].re();
-  }
-  for (int i = 0 ; i < 8; ++i) {
-    a[i].re() = sharedMem[threadIdx.y][threadIdx.x][i];
-  }
-  __syncthreads();
-  for (int i = 0 ; i < 8; ++i) {
-    sharedMem[threadIdx.y][i][threadIdx.x] = a[i].im();
-  }
-  for (int i = 0 ; i < 8; ++i) {
-    a[i].im() = sharedMem[threadIdx.y][threadIdx.x][i];
-  }
 }
 
 
 //////////////////////////// FBFFT Generic ////////////////////////////////
-template <int FFTSize, int BatchesPerBlock, bool InverseFFT>
-__device__ inline void fbfft2DCore(Complex* a) {
-  // B. real FFTs as complex
-  fft2dCore<FFTSize>(a);
+template <int FFTSize, int BatchesPerBlock>
+__device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
+  // Vertical FFT: real FFTs as complex
+  fft2dVertical<FFTSize>(a);
 
-  // C. Bit reversal
+  // Vertical FFT: bit reversal
   // Let the compiler unroll and optimize
 #pragma unroll
   for (int i = 0; i < FFTSize; ++i) {
-    if (i < detail::rev<FFTSize>(i)) {
+    if (i < detail::bitReversal<FFTSize>(i)) {
       // Avoid double swap
-      swap(a[i], a[detail::rev<FFTSize>(i)]);
+      swap(a[i], a[detail::bitReversal<FFTSize>(i)]);
     }
   }
 
-  // D. Inefficiently transpose
-  inefficientTranspose<BatchesPerBlock, FFTSize, InverseFFT> (a);
+  // Prepare horizontal FFT
+  // Twiddles is the same as for 1D but fully data parallel across threadIdx.y
+  FFT1DRoots<FFTSize> roots;
+  roots.template twiddles<true>();
 
-  // Use Hermitian symmetry
-  // Almost 1/2 threads do nothing here, we don't care we're memory bound
-  // because we're register bound.
-  if (InverseFFT || threadIdx.x < FFTSize / 2 + 1) {
-    // E. FFT the rows
-    fft2dCore<FFTSize>(a);
-
-    // F. Bit reversal
-    // Let the compiler unroll and optimize
+  // Horizontal FFT: complex FFTs as complex
 #pragma unroll
-    for (int i = 0; i < FFTSize; ++i) {
-      if (i < detail::rev<FFTSize>(i)) {
-        // Avoid double swap
-        swap(a[i], a[detail::rev<FFTSize>(i)]);
-      }
+  for (int i = 0; i < FFTSize / 2 + 1; ++i) {
+    decimateInFrequency1DWarp<FFTSize>(a[i], roots[0]);
+  }
+
+  // Horizontal FFT: bit reversal across threads
+#pragma unroll
+  for (int i = 0; i < FFTSize / 2 + 1; ++i) {
+    swapHorizontal<FFTSize>(a[i]);
+  }
+}
+
+
+template <int FFTSize, int BatchesPerBlock>
+__device__ inline void fbfft2DVerticalCoreInverse(Complex* a) {
+  // Prepare horizontal FFT
+  // Twiddles is the same as for 1D but fully data parallel across threadIdx.y
+  FFT1DRoots<FFTSize> roots;
+  roots.template twiddles<true>();
+
+  // Horizontal FFT: complex FFTs as complex
+#pragma unroll
+  for (int i = 0; i < FFTSize / 2 + 1; ++i) {
+    decimateInFrequency1DWarp<FFTSize>(a[i], roots[0]);
+  }
+
+  // Horizontal FFT: bit reversal across threads
+#pragma unroll
+  for (int i = 0; i < FFTSize / 2 + 1; ++i) {
+    swapHorizontal<FFTSize>(a[i]);
+  }
+
+  #pragma unroll
+  for (int i = FFTSize / 2 + 1; i < FFTSize; ++i) {
+    a[i] = a[FFTSize - i].conjugate();
+  }
+
+  // Vertical FFT: real FFTs as complex
+  fft2dVertical<FFTSize>(a);
+
+  // Vertical FFT: bit reversal
+  // Let the compiler unroll and optimize
+#pragma unroll
+  for (int i = 0; i < FFTSize; ++i) {
+    if (i < detail::bitReversal<FFTSize>(i)) {
+      // Avoid double swap
+      swap(a[i], a[detail::bitReversal<FFTSize>(i)]);
     }
   }
 }
 
-//
-// This function assumes 'FFTSize' threadIdx.x threads each independently
-// perform a 1-D FFT of size 'FFTSize', transpose and perform another
-// 1-D FFT of size 'FFTSize'.
-//
-// Multiple threadIdx.y threads may independently perform different FFTs in
-// which case, sharedMem must be able to fit them all at the same time (i.e.
-// sharedMem[blockIdx.y][FFTSize][FFTSize + 1]).
-//
-// This is used in iterated convolutions which do not yet support
-// Hermitian symmetry.
-template <int FFTSize, bool InverseFFT>
-__device__ inline void fbfft2DCore(
-    Complex* a,
-    // pass shared memory buffer or lose 2x perf
-    float (*sharedMem)[FFTSize][FFTSize + 1]) {
-  // B. real FFTs as complex
-  fft2dCore<FFTSize>(a);
-
-  // C. Bit reversal
-  // Let the compiler unroll and optimize
-#pragma unroll
-  for (int i = 0; i < FFTSize; ++i) {
-    if (i < detail::rev<FFTSize>(i)) {
-      // Avoid double swap
-      swap(a[i], a[detail::rev<FFTSize>(i)]);
-    }
+// This implementation is without any shared memory:
+//   - 'forward' first does vertical FFT within each thread's private registers
+//     and then horital across all thread's registers
+//   - 'inverse' must start with horizontal FFT followed by vertical
+template <int FFTSize, int BatchesPerBlock, bool InverseFFT>
+__device__ inline void fbfft2DVerticalCore(Complex* a) {
+  if (!InverseFFT) {
+    fbfft2DVerticalCoreForward<FFTSize, BatchesPerBlock>(a);
+  } else {
+    fbfft2DVerticalCoreInverse<FFTSize, BatchesPerBlock>(a);
   }
-
-  // D. Inefficiently transpose
-  inefficientTranspose<FFTSize> (a, sharedMem);
-
-  // Use Hermitian symmetry
-  // Almost 1/2 threads do nothing here, we don't care we're memory bound
-  // because we're register bound.
-  //  if (InverseFFT || threadIdx.x < FFTSize / 2 + 1) {
-    // E. FFT the rows
-    fft2dCore<FFTSize>(a);
-
-    // F. Bit reversal
-    // Let the compiler unroll and optimize
-#pragma unroll
-    for (int i = 0; i < FFTSize; ++i) {
-      if (i < detail::rev<FFTSize>(i)) {
-        // Avoid double swap
-        swap(a[i], a[detail::rev<FFTSize>(i)]);
-      }
-    }
-  //  }
 }
 
 // One single implementation is enough for all cases.
@@ -641,7 +321,7 @@ __device__ inline void fbfft2DCore(
 // This is not implemented here.
 // Without any Hermitian symmetry, we achieve between 185 and 210 GB / s.
 template <int BatchDims, int FFTSize, int BatchesPerBlock>
-__global__ void fbfft2D(
+__device__ __forceinline__ void fbfft2DVertical(
     DeviceTensor<float, BatchDims + 2> real,
     DeviceTensor<float, BatchDims + 3> complexAsFloat,
     const int padL,
@@ -670,44 +350,16 @@ __global__ void fbfft2D(
   }
 
   // B. - F.
-  fbfft2DCore<FFTSize, BatchesPerBlock, false>(a);
+  fbfft2DVerticalCore<FFTSize, BatchesPerBlock, false>(a);
 
-  // G. Write output in pieces, using symmetry
-  if (threadIdx.x < FFTSize / 2 + 1) {
-    // 1. Write [0 , FFTSize / 2 + 1) ^ 2
 #pragma unroll
     for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
       complexAsFloat[batch][i][threadIdx.x].template as<Complex>() = a[i];
     }
-
-    if (0 < threadIdx.x  && threadIdx.x < FFTSize / 2) {
-      {
-        // 2. Orthogonal symmetry for i == 0
-        int i = 0;
-        complexAsFloat[batch][i][FFTSize - threadIdx.x].
-          template as<Complex>() = a[i].conjugate();
-      }
-
-      // 3. Central symmetry for:
-      // [FFTSize / 2 + 1, FFTSize) x [1, FFTSize / 2)
-#pragma unroll
-      for (int i = 1; i < FFTSize / 2; ++i) {
-        complexAsFloat[batch][i][FFTSize - threadIdx.x].
-          template as<Complex>() = a[FFTSize - i].conjugate();
-      }
-
-      {
-        // 4. Orthogonal symmetry for i == FFTSize / 2
-        int i = FFTSize / 2;
-        complexAsFloat[batch][i][FFTSize - threadIdx.x].
-          template as<Complex>() = a[i].conjugate();
-      }
-    }
-  }
 }
 
 template <int BatchDims, int FFTSize, int BatchesPerBlock>
-__global__ void fbifft2D(
+__device__ __forceinline__ void fbifft2DVertical(
     DeviceTensor<Complex, BatchDims + 2> complexSrc,
     DeviceTensor<float, BatchDims + 2> realDst,
     const int padL,
@@ -726,27 +378,13 @@ __global__ void fbifft2D(
   // A. read data in
   // TODO: read as float2
   // TODO: f16 implementation
+  #pragma unroll
   for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
     a[i] = complexSrc[batch][i][threadIdx.x].data()->conjugate();
   }
-  if (threadIdx.x == 0 || threadIdx.x == FFTSize / 2) {
-    // 2. Orthogonal symmetry for first and middle columns along horizontal
-    // plane FFTSize / 2 = 1
-    for (int i = FFTSize / 2 + 1; i < FFTSize; ++i) {
-      a[i] = a[FFTSize - i].conjugate();
-    }
-  } else {
-    // 3. Central symmetry for:
-    //   [1, FFTSize / 2) x [FFTSize / 2 + 1, FFTSize) and
-    //   [FFTSize / 2 + 1, FFTSize) x [FFTSize / 2 + 1, FFTSize)
-    for (int i = FFTSize / 2 + 1; i < FFTSize; ++i) {
-      // conjugate().conjugate() == id
-      a[i] = complexSrc[batch][FFTSize - i][FFTSize - threadIdx.x];
-    }
-  }
 
   // B. - F.
-  fbfft2DCore<FFTSize, BatchesPerBlock, true>(a);
+  fbfft2DVerticalCore<FFTSize, BatchesPerBlock, true>(a);
 
   // C. Write the results back to memory.
   // No need for conjugation as we know we have real results.
@@ -755,6 +393,67 @@ __global__ void fbifft2D(
       realDst[batch][i - padU][threadIdx.x - padL] = a[i].re();
     }
   }
+}
+
+
+template <int BatchDims, int BatchesPerBlock>
+__global__ void fbfft2DVertical_8(
+    DeviceTensor<float, BatchDims + 2> real,
+    DeviceTensor<float, BatchDims + 3> complexAsFloat,
+    const int padL,
+    const int padU) {
+  fbfft2DVertical<BatchDims, 8, BatchesPerBlock>(
+    real, complexAsFloat, padL, padU);
+}
+
+template <int BatchDims, int BatchesPerBlock>
+__global__ void fbfft2DVertical_16(
+    DeviceTensor<float, BatchDims + 2> real,
+    DeviceTensor<float, BatchDims + 3> complexAsFloat,
+    const int padL,
+    const int padU) {
+  fbfft2DVertical<BatchDims, 16, BatchesPerBlock>(
+    real, complexAsFloat, padL, padU);
+}
+
+template <int BatchDims, int BatchesPerBlock>
+__global__ void fbfft2DVertical_32(
+    DeviceTensor<float, BatchDims + 2> real,
+    DeviceTensor<float, BatchDims + 3> complexAsFloat,
+    const int padL,
+    const int padU) {
+  fbfft2DVertical<BatchDims, 32, BatchesPerBlock>(
+    real, complexAsFloat, padL, padU);
+}
+
+template <int BatchDims, int BatchesPerBlock>
+__global__ void fbifft2DVertical_8(
+    DeviceTensor<Complex, BatchDims + 2> complexSrc,
+    DeviceTensor<float, BatchDims + 2> realDst,
+    const int padL,
+    const int padU) {
+  fbifft2DVertical<BatchDims, 8, BatchesPerBlock>(
+    complexSrc, realDst, padL, padU);
+}
+
+template <int BatchDims, int BatchesPerBlock>
+__global__ void fbifft2DVertical_16(
+    DeviceTensor<Complex, BatchDims + 2> complexSrc,
+    DeviceTensor<float, BatchDims + 2> realDst,
+    const int padL,
+    const int padU) {
+  fbifft2DVertical<BatchDims, 16, BatchesPerBlock>(
+    complexSrc, realDst, padL, padU);
+}
+
+template <int BatchDims, int BatchesPerBlock>
+__global__ void fbifft2DVertical_32(
+    DeviceTensor<Complex, BatchDims + 2> complexSrc,
+    DeviceTensor<float, BatchDims + 2> realDst,
+    const int padL,
+    const int padU) {
+  fbifft2DVertical<BatchDims, 32, BatchesPerBlock>(
+    complexSrc, realDst, padL, padU);
 }
 
 }}}}

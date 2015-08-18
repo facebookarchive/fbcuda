@@ -456,10 +456,6 @@ FBFFTParameters::ErrorCode fbfft2D(
     cudaStream_t s) {
   initTwiddles();
 
-  // TODO: The limiter for size 256 is the twiddle cross-register shuffle
-  // implementation that is currently unrolled by hand.
-  // TODO: Starting 512, the occupancy goes down due to shared memory bit
-  // reversal.
   // Whatever the real input size, we can make assumptions on the
   // complexAsFloat size related to the fft size (because interpolation).
   // If buffer, it must be sized N x (N / 2 +1)
@@ -470,7 +466,7 @@ FBFFTParameters::ErrorCode fbfft2D(
   assert(complexAsFloat.getSize(BatchDims) > 32 ||
          (complexAsFloat.getSize(BatchDims) ==
           numHermitian(complexAsFloat.getSize(BatchDims + 1))));
-  if (complexAsFloat.getSize(BatchDims) > 256) {
+  if (complexAsFloat.getSize(BatchDims) > 128) {
     return FBFFTParameters::UnsupportedSize;
   }
 
@@ -496,7 +492,7 @@ FBFFTParameters::ErrorCode fbfft2D(
     CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_BLOCK);
     dim3 blocks(blx, bly);
     dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
-    detail::fbfft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
+    detail::fbfft2DVertical_32<BatchDims, BATCHES_PER_BLOCK>
       <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
     if (cudaSuccess != cudaPeekAtLastError()) {
       return FBFFTParameters::CudaError;
@@ -528,7 +524,7 @@ FBFFTParameters::ErrorCode fbfft2D(
     CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_BLOCK);
     dim3 blocks(blx, bly);
     dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
-    detail::fbfft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
+    detail::fbfft2DVertical_16<BatchDims, BATCHES_PER_BLOCK>
       <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
     if (cudaSuccess != cudaPeekAtLastError()) {
       return FBFFTParameters::CudaError;
@@ -560,7 +556,7 @@ FBFFTParameters::ErrorCode fbfft2D(
     CHECK_LE(real.getSize(0), blx * bly * BATCHES_PER_BLOCK);
     dim3 blocks(blx, bly);
     dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
-    detail::fbfft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
+    detail::fbfft2DVertical_8<BatchDims, BATCHES_PER_BLOCK>
       <<<blocks, threads, 0, s>>>(real, complexAsFloat, padL, padU);
     if (cudaSuccess != cudaPeekAtLastError()) {
       return FBFFTParameters::CudaError;
@@ -633,10 +629,6 @@ FBFFTParameters::ErrorCode fbfft2D(
 
   initTwiddles();
 
-  // TODO: The limiter for size 256 is the twiddle cross-register shuffle
-  // implementation that is currently unrolled by hand.
-  // TODO: Starting 512, the occupancy goes down due to shared memory bit
-  // reversal.
   // Input is the temporary buffer and must be sized as N x (N / 2 + 1)
   assert((complexSrc.getSize(BatchDims + 1) ==
           numHermitian(complexSrc.getSize(BatchDims))));
@@ -644,7 +636,7 @@ FBFFTParameters::ErrorCode fbfft2D(
   assert(complexSrc.getSize(BatchDims) >= 64);
   // Output is the real output and must be sized as the input, must enforce
   // this upstream
-  if (complexSrc.getSize(BatchDims + 1) > 256) {
+  if (complexSrc.getSize(BatchDims + 1) > 128) {
     return FBFFTParameters::UnsupportedSize;
   }
 

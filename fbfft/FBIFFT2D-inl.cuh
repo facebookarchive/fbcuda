@@ -534,8 +534,6 @@ FBFFTParameters::ErrorCode fbifft2D(
 
   initTwiddles();
 
-  // TODO: The limiter for size 256 is the twiddle cross-register shuffle
-  // implementation that is currently unrolled by hand.
   if (srcComplexAsFloat.getSize(1) !=
       numHermitian(srcComplexAsFloat.getSize(2)) ||
       srcComplexAsFloat.getSize(2) > 128 ||
@@ -576,8 +574,6 @@ FBFFTParameters::ErrorCode fbifft2D(
 
   initTwiddles();
 
-  // TODO: The limiter for size 256 is the twiddle cross-register shuffle
-  // implementation that is currently unrolled by hand.
   bool inputProperlySizedLE32 =
     srcComplex.getSize(BatchDims + 1) > 32 ||
     (srcComplex.getSize(BatchDims + 1) <= 32 &&
@@ -613,7 +609,7 @@ FBFFTParameters::ErrorCode fbifft2D(
     CHECK_LE(realDst.getSize(0), blx * bly * BATCHES_PER_BLOCK);
     dim3 blocks(blx, bly);
     dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
-    detail::fbifft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
+    detail::fbifft2DVertical_32<BatchDims, BATCHES_PER_BLOCK>
       <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);
     if (cudaSuccess != cudaPeekAtLastError()) {
       return FBFFTParameters::CudaError;
@@ -644,7 +640,7 @@ FBFFTParameters::ErrorCode fbifft2D(
     CHECK_LE(realDst.getSize(0), blx * bly * BATCHES_PER_BLOCK);
     dim3 blocks(blx, bly);
     dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
-    detail::fbifft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
+    detail::fbifft2DVertical_16<BatchDims, BATCHES_PER_BLOCK>
       <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);
     if (cudaSuccess != cudaPeekAtLastError()) {
       return FBFFTParameters::CudaError;
@@ -675,7 +671,7 @@ FBFFTParameters::ErrorCode fbifft2D(
     CHECK_LE(realDst.getSize(0), blx * bly * BATCHES_PER_BLOCK);
     dim3 blocks(blx, bly);
     dim3 threads(FFT_SIZE, BATCHES_PER_BLOCK);
-    detail::fbifft2D<BatchDims, FFT_SIZE, BATCHES_PER_BLOCK>
+    detail::fbifft2DVertical_8<BatchDims, BATCHES_PER_BLOCK>
       <<<blocks, threads, 0, s>>>(srcComplex, realDst, padL, padU);
     if (cudaSuccess != cudaPeekAtLastError()) {
       return FBFFTParameters::CudaError;

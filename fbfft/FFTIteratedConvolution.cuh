@@ -53,11 +53,13 @@ __global__ void updateOutputIteratedKernel(
     const DeviceTensor<float, 4> weight,
     size_t numTiles) {
 
+/*
+
   // constexpr int NumWarps = (NumTiles / NumTilesPerWarp)
   assert(numTiles % NumTilesPerWarp == 0);
 
   // sharedMem[A] where A must be threadIdx.y == number of FFTs in parallel
-  __shared__ float sharedMem[NumWarps][FFTSize][FFTSize + 1];
+  // __shared__ float sharedMem[NumWarps][FFTSize][FFTSize + 1];
 
   const int batch = blockIdx.x;
   const int outputPlane = blockIdx.y;
@@ -78,7 +80,7 @@ __global__ void updateOutputIteratedKernel(
     }
 
     // B1. In place FFTs via sharedMem (w x h format)
-    fbfft2DCore<FFTSize, false>(wei, sharedMem);
+    fbfft2DVerticalCore<FFTSize, 1, false>(wei);
 
     for (int tileIndexOuter = tileIndexStart;
          tileIndexOuter < numTiles; tileIndexOuter += NumTilesPerWarp * NumWarps)
@@ -107,7 +109,7 @@ __global__ void updateOutputIteratedKernel(
                 }
 
                 // B2. In place FFTs via sharedMem (w x h format)
-                fbfft2DCore<FFTSize, false>(in, sharedMem);
+                fbfft2DVerticalCore<FFTSize, 1, false>(in);
 
                 // C. Pointwise multiply and conjugation
                 for (int i = 0; i < FFTSize; ++i) {
@@ -119,7 +121,7 @@ __global__ void updateOutputIteratedKernel(
                   out[i] = out[i].conjugate();
                 }
 
-                fbfft2DCore<FFTSize, true>(out, sharedMem);
+                fbfft2DVerticalCore<FFTSize, 1, true>(out);
 
                 float notIsFirstInputPlane = (inputPlane == 0) ? 0.0f : 1.0f;
                 TiledDeviceTensor<float, 4>& tdo = outs[tileIndex];
@@ -142,6 +144,9 @@ __global__ void updateOutputIteratedKernel(
               }}} // for tileIndex
         }}} // for tileIndexOuter
   } // for inputPlaneOuter
+
+*/
+
 }
 
 
@@ -152,8 +157,10 @@ __global__ void updateGradInputIteratedKernel(
     const DeviceTensor<float, 4> weight,
     size_t numTiles) {
 
+/*
+
   // sharedMem[A] where A must be threadIdx.y == number of FFTs in parallel
-  __shared__ float sharedMem[NumWarps][FFTSize][FFTSize + 1];
+  // __shared__ float sharedMem[NumWarps][FFTSize][FFTSize + 1];
 
   const int batch = blockIdx.x;
   const int inputPlane = blockIdx.y;
@@ -201,10 +208,10 @@ __global__ void updateGradInputIteratedKernel(
                 }
 
                 // B1. In place FFTs via sharedMem (w x h format)
-                fbfft2DCore<FFTSize, false>(wei, sharedMem);
+                fbfft2DVerticalCore<FFTSize, 1, false>(wei);
 
                 // B2. In place FFTs via sharedMem (w x h format)
-                fbfft2DCore<FFTSize, false>(out, sharedMem);
+                fbfft2DVerticalCore<FFTSize, 1, false>(out);
 
                 // C. Pointwise multiply and conjugation
                 for (int i = 0; i < FFTSize; ++i) {
@@ -215,7 +222,7 @@ __global__ void updateGradInputIteratedKernel(
                 for (int i = 0; i < FFTSize; ++i) {
                   in[i] = in[i].conjugate();
                 }
-                fbfft2DCore<FFTSize, true>(in, sharedMem);
+                fbfft2DVerticalCore<FFTSize, 1, true>(in);
 
                 float notIsFirstOutputPlane = (outputPlane == 0) ? 0.0f : 1.0f;
                 TiledDeviceTensor<float, 4>& tdi = ins[tileIndex];
@@ -237,6 +244,9 @@ __global__ void updateGradInputIteratedKernel(
               }}} // for tileIndex
         }}} // for tileIndexOuter
   } // for outputPlane
+
+*/
+
 }
 
 
@@ -248,6 +258,8 @@ __global__ void accGradParametersIteratedKernel(
     DeviceTensor<float, 4> weight,
     size_t numTiles,
     float scale) {
+
+/*
 
   // sharedMem[A] where A must be threadIdx.y == number of FFTs in parallel
   __shared__ float sharedMem[NumWarps][FFTSize][FFTSize + 1];
@@ -304,10 +316,10 @@ __global__ void accGradParametersIteratedKernel(
 
 
                 // B1. In place FFTs via sharedMem (w x h format)
-                fbfft2DCore<FFTSize, false>(in, sharedMem);
+                fbfft2DVerticalCore<FFTSize, 1, false>(in);
 
                 // B2. In place FFTs via sharedMem (w x h format)
-                fbfft2DCore<FFTSize, false>(out, sharedMem);
+                fbfft2DVerticalCore<FFTSize, 1, false>(out);
 
                 // C. Pointwise multiply and conjugation
                 // invNorm and scale only the local contribution
@@ -324,7 +336,7 @@ __global__ void accGradParametersIteratedKernel(
   for (int i = 0; i < FFTSize; ++i) {
     wei[i] = wei[i].conjugate() * (invNorm * scale);
   }
-  fbfft2DCore<FFTSize, true>(wei, sharedMem);
+  fbfft2DVerticalCore<FFTSize, 1, true>(wei);
 
   // Need to reduce across threadIdx.y
   #pragma unroll
@@ -362,6 +374,9 @@ __global__ void accGradParametersIteratedKernel(
       }
     }
   }
+
+*/
+
 }
 
 
@@ -443,10 +458,10 @@ template<> bool FFTIteratedConvolution<8>(
     CHECK_LE(1, FFTSize);
 
     // Tune which sizes to use in practice
-    INST_UPDATE_OUTPUT_ITERATED(5, 5);
-    INST_UPDATE_OUTPUT_ITERATED(4, 4);
-    INST_UPDATE_OUTPUT_ITERATED(3, 3);
-    INST_UPDATE_OUTPUT_ITERATED(2, 2);
+    // INST_UPDATE_OUTPUT_ITERATED(5, 5);
+    // INST_UPDATE_OUTPUT_ITERATED(4, 4);
+    // INST_UPDATE_OUTPUT_ITERATED(3, 3);
+    // INST_UPDATE_OUTPUT_ITERATED(2, 2);
     INST_UPDATE_OUTPUT_ITERATED(1, 1);
   }
 
@@ -456,10 +471,10 @@ template<> bool FFTIteratedConvolution<8>(
     CHECK_LE(1, FFTSize);
 
     // Tune which sizes to use in practice
-    INST_UPDATE_GRAD_INPUT_ITERATED(5, 5);
-    INST_UPDATE_GRAD_INPUT_ITERATED(4, 4);
-    INST_UPDATE_GRAD_INPUT_ITERATED(3, 3);
-    INST_UPDATE_GRAD_INPUT_ITERATED(2, 2);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(5, 5);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(4, 4);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(3, 3);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(2, 2);
     INST_UPDATE_GRAD_INPUT_ITERATED(1, 1);
   }
 
@@ -495,10 +510,10 @@ template<> bool FFTIteratedConvolution<16>(
     CHECK_LE(1, FFTSize);
 
     // Tune which sizes to use in practice
-    INST_UPDATE_OUTPUT_ITERATED(5, 5);
-    INST_UPDATE_OUTPUT_ITERATED(4, 4);
-    INST_UPDATE_OUTPUT_ITERATED(3, 3);
-    INST_UPDATE_OUTPUT_ITERATED(2, 2);
+    // INST_UPDATE_OUTPUT_ITERATED(5, 5);
+    // INST_UPDATE_OUTPUT_ITERATED(4, 4);
+    // INST_UPDATE_OUTPUT_ITERATED(3, 3);
+    // INST_UPDATE_OUTPUT_ITERATED(2, 2);
     INST_UPDATE_OUTPUT_ITERATED(1, 1);
   }
 
@@ -508,10 +523,10 @@ template<> bool FFTIteratedConvolution<16>(
     CHECK_LE(1, FFTSize);
 
     // Tune which sizes to use in practice
-    INST_UPDATE_GRAD_INPUT_ITERATED(5, 5);
-    INST_UPDATE_GRAD_INPUT_ITERATED(4, 4);
-    INST_UPDATE_GRAD_INPUT_ITERATED(3, 3);
-    INST_UPDATE_GRAD_INPUT_ITERATED(2, 2);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(5, 5);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(4, 4);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(3, 3);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(2, 2);
     INST_UPDATE_GRAD_INPUT_ITERATED(1, 1);
   }
 
@@ -547,10 +562,10 @@ template<> bool FFTIteratedConvolution<32>(
     CHECK_LE(1, FFTSize);
 
     // Tune which sizes to use in practice
-    INST_UPDATE_OUTPUT_ITERATED(5, 5);
-    INST_UPDATE_OUTPUT_ITERATED(4, 4);
-    INST_UPDATE_OUTPUT_ITERATED(3, 3);
-    INST_UPDATE_OUTPUT_ITERATED(2, 2);
+    // INST_UPDATE_OUTPUT_ITERATED(5, 5);
+    // INST_UPDATE_OUTPUT_ITERATED(4, 4);
+    // INST_UPDATE_OUTPUT_ITERATED(3, 3);
+    // INST_UPDATE_OUTPUT_ITERATED(2, 2);
     INST_UPDATE_OUTPUT_ITERATED(1, 1);
   }
 
@@ -560,10 +575,10 @@ template<> bool FFTIteratedConvolution<32>(
     CHECK_LE(1, FFTSize);
 
     // Tune which sizes to use in practice
-    INST_UPDATE_GRAD_INPUT_ITERATED(5, 5);
-    INST_UPDATE_GRAD_INPUT_ITERATED(4, 4);
-    INST_UPDATE_GRAD_INPUT_ITERATED(3, 3);
-    INST_UPDATE_GRAD_INPUT_ITERATED(2, 2);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(5, 5);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(4, 4);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(3, 3);
+    // INST_UPDATE_GRAD_INPUT_ITERATED(2, 2);
     INST_UPDATE_GRAD_INPUT_ITERATED(1, 1);
   }
 

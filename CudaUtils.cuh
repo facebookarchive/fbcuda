@@ -188,22 +188,20 @@ __device__ __forceinline__ int getMSB(int val) {
   return ret;
 }
 
-// TODO: Make constexpr with cuda-7
-// Support up until 2^10 atm
 template <int Val>
-__device__ __forceinline__ int getMSB() {
-  if (Val >= 1024 && Val < 2048) return 10;
-  if (Val >= 512) return 9;
-  if (Val >= 256) return 8;
-  if (Val >= 128) return 7;
-  if (Val >= 64) return 6;
-  if (Val >= 32) return 5;
-  if (Val >= 16) return 4;
-  if (Val >= 8) return 3;
-  if (Val >= 4) return 2;
-  if (Val >= 2) return 1;
-  if (Val == 1) return 0;
-  return -1;
+__device__ __forceinline__ constexpr int getMSB() {
+  return
+    ((Val >= 1024 && Val < 2048) ? 10 :
+     ((Val >= 512) ? 9 :
+      ((Val >= 256) ? 8 :
+       ((Val >= 128) ? 7 :
+        ((Val >= 64) ? 6 :
+         ((Val >= 32) ? 5 :
+          ((Val >= 16) ? 4 :
+           ((Val >= 8) ? 3 :
+            ((Val >= 4) ? 2 :
+             ((Val >= 2) ? 1 :
+              ((Val == 1) ? 0 : -1)))))))))));
 }
 
 } }  // namespace

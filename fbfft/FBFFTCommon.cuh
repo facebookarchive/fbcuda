@@ -38,8 +38,6 @@ __device__ __forceinline__ bool inBounds(
           (unsigned)(x - padL) < (unsigned)(t.getSize(3)));
 }
 
-#define PI 0x1.921FB6p+1f
-
 __device__ inline
 unsigned int reverse(unsigned int x, unsigned int nbits) {
   return __brev(x) >> (WARP_SIZE - nbits);
@@ -132,97 +130,23 @@ __device__ inline Complex ldg(const Complex* p) {
 
 template <int FFTSize>
 struct FFT1DRoots : public FFT1DCoeffs<FFTSize> {
-  // Computes the twiddles for the least amount possible of registers and uses
-  // trigonometric symmetries to populate the other registers.
-  // We always compute at least 1 warpful of value using cexp.
-  // For FFTs <= WARP_SIZE we are done
-  // For FFTs >= WARP_SIZE, given the number of registers per warp we know which
-  // register indices fall at PI/4, PI/2, PI and 2*PI.
-  // Since we always compute at least 1 warpful of values, we only consider
-  // exact subdivisions of WARP_SIZE for symmetries.
-  // For instance:
-  //   - for FFTSize == 64, we have 2 registers corresponding to each half of
-  //     the unit circle. We compute the first register (and not less by
-  //     construction) and then we can use symmetry wrt -PI to fill the other
-  //     register.
-  //   - for FFTSize == 128, we have 4 registers corresponding to each
-  //     quadrant of the unit circle. We compute the first register (and not
-  //     less by construction) and then we can use symmetry wrt -PI/2 and -PI
-  //     to fill the other registers.
-  //
-  // This is critical performance-wise and works well atm with unrolling.
-  //
-  // Twiddles are more efficiently computed for 1D FFTs and more efficiently
-  // loaded from constant memory for 2D FFTs.
+
   template <bool ForwardFFT>
   __device__ inline void twiddles() {
-    // These are the sizes empirically determined to be more SFU bound
-    if ((ForwardFFT && (FFTSize == 16 || FFTSize == 32)) ||
-        (!ForwardFFT && (FFTSize == 128))) {
-      twiddlesFromMemory<ForwardFFT>();
-      return;
-    }
-
-    const float twoPi = (ForwardFFT) ? -2.0f * PI : 2.0f * PI;
-    // Note that we ever only need half the twiddles; see ASCII diagram:
-    // for FFT-256 we only use w^0 .. w^127 and then recursively only halves.
-    if (this->ColumnsPerWarp >= 4) {
-#pragma unroll
-for (int index = 0; index < ceil((int)this->ColumnsPerWarp, 2); ++index) {
-        // Can always use adjustedThreadIdxX since blockDim.x == WARP_SIZE
-        // is enforced
-        int x = adjustedThreadIdxX<FFTSize>() + index * WARP_SIZE;
-        if (index < ceil((int)this->ColumnsPerWarp, 4)) {
-          // Compute in any case
-          (*this)[index].cexp(twoPi * (1.0f / (float)FFTSize) * x);
-        } else if (index < ceil((int)this->ColumnsPerWarp, 2)) {
-          if (ForwardFFT) {
-            // Symmetry wrt -PI/2
-            (*this)[index] =
-              (*this)[index - ceil((int)this->ColumnsPerWarp, 4)]
-              .transpose()
-              .conjugate();
-          } else {
-            // Symmetry wrt PI/2
-            (*this)[index] =
-              - (*this)[index - ceil((int)this->ColumnsPerWarp, 4)]
-              .transpose()
-              .conjugate();
-          }
-        } else {
-          // Symmetry wrt -PI == PI
-          (*this)[index] = -(*this)[this->ColumnsPerWarp - index];
-        }
-      }
-    } else if (this->ColumnsPerWarp == 2) {
-      // Compute in any case, can always use adjustedThreadIdxX since
-      // blockDim.x == WARP_SIZE is enforced
-      int x = adjustedThreadIdxX<FFTSize>();
-      (*this)[0].cexp(twoPi * (1.0f / (float)FFTSize) * x);
-      // Symmetry wrt -PI, skip since only need half
-    } else {
-      // Compute in any case
-      // adjustedThreadIdxX<FFTSize>() lets us cram multiple < WARP_SIZE FFTs in
-      // a warp
-      int x = adjustedThreadIdxX<FFTSize>();
-      (*this)[0].cexp(twoPi * (1.0f / (float)FFTSize) * x);
-    }
+    twiddlesFromMemory<ForwardFFT>();
   }
 
-  // This gets another:
-  //   10% performance for 2d 16x16
-  //   20% performance for 2d 32x32
-  // However it performs worse in all the other cases, still 16x16 and 32x32
-  //   are important enough cases that we want the absolute best perf for them.
   template <bool ForwardFFT>
   __device__ inline void twiddlesFromMemory() {
 #pragma unroll
-    for (int index = 0; index < ceil((int)this->ColumnsPerWarp, 2); ++index) {
+    for (int index = 0;
+         index < ceil((int)this->ColumnsPerWarp, 2); ++index) {
       int x = threadIdx.x % FFTSize + index * WARP_SIZE;
       (*this)[index] = (ForwardFFT)  ?
-        ldg(&((Complex*)twiddleFactors)[x * (kNumTwiddles / FFTSize)]) :
-        ldg(&((Complex*)twiddleFactors)[x * (kNumTwiddles / FFTSize)]).
-        conjugate();
+        ldg(&((Complex*)twiddleFactors)[
+              2 * x * (kNumTwiddles / FFTSize)]).conjugate() :
+        ldg(&((Complex*)twiddleFactors)[
+              2 * x * (kNumTwiddles / FFTSize)]);
     }
   }
 };
