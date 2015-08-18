@@ -4,6 +4,8 @@
 
 #include "cuda/Complex.cuh"
 
+#include <cmath>
+
 namespace facebook { namespace cuda { namespace fbfft {
 
 namespace {
@@ -76,6 +78,121 @@ namespace {
 #define FBFFT32_SINF_T   FBFFT32_COSF_D
 #define FBFFT32_SINF_U   FBFFT32_COSF_E
 #define FBFFT32_SINF_V   FBFFT32_COSF_F
+
+template <int FFTSize>
+__device__ __host__ __forceinline__ float cos(int index);
+
+template <>
+__device__ __host__ __forceinline__ float cos<32>(int index) {
+  if (index == 0) return FBFFT32_COSF_0;
+  if (index == 1) return FBFFT32_COSF_1;
+  if (index == 2) return FBFFT32_COSF_2;
+  if (index == 3) return FBFFT32_COSF_3;
+  if (index == 4) return FBFFT32_COSF_4;
+  if (index == 5) return FBFFT32_COSF_5;
+  if (index == 6) return FBFFT32_COSF_6;
+  if (index == 7) return FBFFT32_COSF_7;
+  if (index == 8) return FBFFT32_COSF_8;
+  if (index == 9) return FBFFT32_COSF_9;
+  if (index == 10) return FBFFT32_COSF_A;
+  if (index == 11) return FBFFT32_COSF_B;
+  if (index == 12) return FBFFT32_COSF_C;
+  if (index == 13) return FBFFT32_COSF_D;
+  if (index == 14) return FBFFT32_COSF_E;
+  if (index == 15) return FBFFT32_COSF_F;
+  if (index == 16) return FBFFT32_COSF_G;
+  if (index == 17) return FBFFT32_COSF_H;
+  if (index == 18) return FBFFT32_COSF_I;
+  if (index == 19) return FBFFT32_COSF_J;
+  if (index == 20) return FBFFT32_COSF_K;
+  if (index == 21) return FBFFT32_COSF_L;
+  if (index == 22) return FBFFT32_COSF_M;
+  if (index == 23) return FBFFT32_COSF_N;
+  if (index == 24) return FBFFT32_COSF_O;
+  if (index == 25) return FBFFT32_COSF_P;
+  if (index == 26) return FBFFT32_COSF_Q;
+  if (index == 27) return FBFFT32_COSF_R;
+  if (index == 28) return FBFFT32_COSF_S;
+  if (index == 29) return FBFFT32_COSF_T;
+  if (index == 30) return FBFFT32_COSF_U;
+  if (index == 31) return FBFFT32_COSF_V;
+
+  return NAN;
+}
+
+template <>
+__device__ __host__ __forceinline__
+float cos<16>(int index) { return cos<32>(2 * index); }
+
+template <>
+__device__ __host__ __forceinline__
+float cos<8>(int index) { return cos<16>(2 * index); }
+
+template <>
+__device__ __host__ __forceinline__
+float cos<4>(int index) { return cos<8>(2 * index); }
+
+template <>
+__device__ __host__ __forceinline__
+float cos<2>(int index) { return cos<4>(2 * index); }
+
+template <int FFTSize> __device__ __host__ __forceinline__ float sin(int index);
+
+template <>
+__device__ __host__ __forceinline__
+float sin<32>(int index) {
+  if (index == 0) return FBFFT32_SINF_0;
+  if (index == 1) return FBFFT32_SINF_1;
+  if (index == 2) return FBFFT32_SINF_2;
+  if (index == 3) return FBFFT32_SINF_3;
+  if (index == 4) return FBFFT32_SINF_4;
+  if (index == 5) return FBFFT32_SINF_5;
+  if (index == 6) return FBFFT32_SINF_6;
+  if (index == 7) return FBFFT32_SINF_7;
+  if (index == 8) return FBFFT32_SINF_8;
+  if (index == 9) return FBFFT32_SINF_9;
+  if (index == 10) return FBFFT32_SINF_A;
+  if (index == 11) return FBFFT32_SINF_B;
+  if (index == 12) return FBFFT32_SINF_C;
+  if (index == 13) return FBFFT32_SINF_D;
+  if (index == 14) return FBFFT32_SINF_E;
+  if (index == 15) return FBFFT32_SINF_F;
+  if (index == 16) return FBFFT32_SINF_G;
+  if (index == 17) return FBFFT32_SINF_H;
+  if (index == 18) return FBFFT32_SINF_I;
+  if (index == 19) return FBFFT32_SINF_J;
+  if (index == 20) return FBFFT32_SINF_K;
+  if (index == 21) return FBFFT32_SINF_L;
+  if (index == 22) return FBFFT32_SINF_M;
+  if (index == 23) return FBFFT32_SINF_N;
+  if (index == 24) return FBFFT32_SINF_O;
+  if (index == 25) return FBFFT32_SINF_P;
+  if (index == 26) return FBFFT32_SINF_Q;
+  if (index == 27) return FBFFT32_SINF_R;
+  if (index == 28) return FBFFT32_SINF_S;
+  if (index == 29) return FBFFT32_SINF_T;
+  if (index == 30) return FBFFT32_SINF_U;
+  if (index == 31) return FBFFT32_SINF_V;
+
+  return NAN;
+}
+
+template <>
+__device__ __host__ __forceinline__
+float sin<16>(int index) { return sin<32>(2 * index); }
+
+template <>
+__device__ __host__ __forceinline__
+float sin<8>(int index) { return sin<16>(2 * index); }
+
+template <>
+__device__ __host__ __forceinline__
+float sin<4>(int index) { return sin<8>(2 * index); }
+
+template <>
+__device__ __host__ __forceinline__
+float sin<2>(int index) { return sin<4>(2 * index); }
+
 
 #define FBFFT32_CEXPF_0 Complex(FBFFT32_COSF_0, FBFFT32_SINF_0)
 #define FBFFT32_CEXPF_1 Complex(FBFFT32_COSF_1, FBFFT32_SINF_1)

@@ -33,6 +33,17 @@ namespace detail {
 
 template< int > __device__ inline int bitReversal(int);
 
+template<> __device__ inline int bitReversal<4>(int i)
+{
+  switch (i) {
+    case  0:  return 0;
+    case  1:  return 2;
+    case  2:  return 1;
+    case  3:  return 3;
+    default:  return 0;
+  }
+}
+
 template<> __device__ inline int bitReversal<8>(int i)
 {
   switch (i) {
@@ -205,6 +216,10 @@ __device__ inline void FFT32(Complex* a)
 template<int N>
 __device__ inline void fft2dVertical(Complex *a);
 
+template<> void fft2dVertical<4>(Complex* a) {
+  FFT4(a[0], a[1], a[2], a[3]);
+}
+
 template<> void fft2dVertical<8>(Complex* a) {
   FFT8(a);
 }
@@ -217,20 +232,52 @@ template<> void fft2dVertical<32>(Complex* a) {
   FFT32(a);
 }
 
-
 //////////////////////////// FBFFT Generic ////////////////////////////////
-template <int FFTSize, int BatchesPerBlock>
+template <int FFTSize, int BatchesPerBlock, bool Hermitian = false>
 __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
   // Vertical FFT: real FFTs as complex
-  fft2dVertical<FFTSize>(a);
-
   // Vertical FFT: bit reversal
   // Let the compiler unroll and optimize
+  if (Hermitian) {
+    fft2dVertical<FFTSize / 2>(a);
 #pragma unroll
-  for (int i = 0; i < FFTSize; ++i) {
-    if (i < detail::bitReversal<FFTSize>(i)) {
-      // Avoid double swap
-      swap(a[i], a[detail::bitReversal<FFTSize>(i)]);
+    for (int i = 0; i < FFTSize / 2; ++i) {
+      if (i < detail::bitReversal<FFTSize / 2>(i)) {
+        // Avoid double swap
+        swap(a[i], a[detail::bitReversal<FFTSize / 2>(i)]);
+      }
+    }
+
+    if (Hermitian) {
+      Complex r[FFTSize / 2 + 1];
+      r[0] = Complex(a[0].re() + a[0].im(), 0.0f);
+#pragma unroll
+      for (int i = 1; i < FFTSize / 2; ++i) {
+        float xpr, xmr, xpi, xmi;
+        xpr = 0.5f * (a[i].re() + a[FFTSize / 2 - i].re());
+        xmr = 0.5f * (a[i].re() - a[FFTSize / 2 - i].re());
+        xpi = 0.5f * (a[i].im() + a[FFTSize / 2 - i].im());
+        xmi = 0.5f * (a[i].im() - a[FFTSize / 2 - i].im());
+        // cos, sin (i * pi / (FFTSize / 2))
+        float cosf = cos<FFTSize / 2>(i);
+        float sinf = sin<FFTSize / 2>(i);
+        r[i] = Complex(xpr + cosf * xpi - sinf * xmr,
+                       xmi - sinf * xpi - cosf * xmr);
+      }
+      r[FFTSize / 2] = Complex(a[0].re() - a[0].im(), 0.0f);
+#pragma unroll
+      for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
+        a[i] = r[i];
+      }
+    }
+  } else {
+    fft2dVertical<FFTSize>(a);
+#pragma unroll
+    for (int i = 0; i < FFTSize; ++i) {
+      if (i < detail::bitReversal<FFTSize>(i)) {
+        // Avoid double swap
+        swap(a[i], a[detail::bitReversal<FFTSize>(i)]);
+      }
     }
   }
 
@@ -239,21 +286,24 @@ __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
   FFT1DRoots<FFTSize> roots;
   roots.template twiddles<true>();
 
+  constexpr int UB = (Hermitian) ? FFTSize / 2 + 1 : FFTSize / 2 + 1;
+
   // Horizontal FFT: complex FFTs as complex
 #pragma unroll
-  for (int i = 0; i < FFTSize / 2 + 1; ++i) {
+  for (int i = 0; i < UB; ++i) {
     decimateInFrequency1DWarp<FFTSize>(a[i], roots[0]);
   }
 
   // Horizontal FFT: bit reversal across threads
 #pragma unroll
-  for (int i = 0; i < FFTSize / 2 + 1; ++i) {
+  for (int i = 0; i < UB; ++i) {
     swapHorizontal<FFTSize>(a[i]);
   }
+
 }
 
 
-template <int FFTSize, int BatchesPerBlock>
+template <int FFTSize, int BatchesPerBlock, bool Hermitian = false>
 __device__ inline void fbfft2DVerticalCoreInverse(Complex* a) {
   // Prepare horizontal FFT
   // Twiddles is the same as for 1D but fully data parallel across threadIdx.y
@@ -291,19 +341,6 @@ __device__ inline void fbfft2DVerticalCoreInverse(Complex* a) {
   }
 }
 
-// This implementation is without any shared memory:
-//   - 'forward' first does vertical FFT within each thread's private registers
-//     and then horital across all thread's registers
-//   - 'inverse' must start with horizontal FFT followed by vertical
-template <int FFTSize, int BatchesPerBlock, bool InverseFFT>
-__device__ inline void fbfft2DVerticalCore(Complex* a) {
-  if (!InverseFFT) {
-    fbfft2DVerticalCoreForward<FFTSize, BatchesPerBlock>(a);
-  } else {
-    fbfft2DVerticalCoreInverse<FFTSize, BatchesPerBlock>(a);
-  }
-}
-
 // One single implementation is enough for all cases.
 // This implementation does not use the full Hermitian symmetry to reduce
 // flops (i.e. does not do 2 real FFTs as 1 complex or 1 2N real FFT as 1 N
@@ -326,7 +363,9 @@ __device__ __forceinline__ void fbfft2DVertical(
     DeviceTensor<float, BatchDims + 3> complexAsFloat,
     const int padL,
     const int padU) {
-  assert(BatchesPerBlock >= 1);
+  static_assert(FFTSize % 8 == 0,
+                "FBFFT supported only for sizes 8, 16, 32 atm");
+  static_assert(BatchesPerBlock >= 1, "BatchesPerBlock should be >= 1");
   assert(gridDim.z == 1);
   assert(blockDim.z == 1);
 
@@ -338,24 +377,31 @@ __device__ __forceinline__ void fbfft2DVertical(
     return;
   }
 
-  // Perform 2 FFTs in place
-  Complex a[FFTSize];
-  // A. read data in
-  // TODO: read as float2
-  // TODO: f16 implementation
-  for (int i = 0 ; i < FFTSize; ++i) {
-    a[i] = inBounds(i, threadIdx.x, padU, padL, real) ?
-      Complex(real[batch][i - padU][threadIdx.x - padL].ldg()) :
-      Complex(0.0f, 0.0f);
-  }
+  constexpr bool Hermitian = true;
+  if (Hermitian) {
+    // Perform 2 FFTs in place
+    Complex a[FFTSize / 2  + 1];
+    // A. read data in
+    // TODO: read as float2
+    // TODO: f16 implementation
+#pragma unroll
+    for (int i = 0 ; i < FFTSize; i += 2) {
+      float f1 = inBounds(i, threadIdx.x, padU, padL, real) ?
+        real[batch][i - padU][threadIdx.x - padL].ldg() : 0.0f;
+      float f2 = inBounds(i + 1, threadIdx.x, padU, padL, real) ?
+        real[batch][i + 1 - padU][threadIdx.x - padL].ldg() : 0.0f;
+      a[i / 2] = Complex(f1, f2);
+    }
 
-  // B. - F.
-  fbfft2DVerticalCore<FFTSize, BatchesPerBlock, false>(a);
+    // B. - F.
+    fbfft2DVerticalCoreForward<FFTSize, BatchesPerBlock, true>(a);
 
 #pragma unroll
     for (int i = 0 ; i < FFTSize / 2 + 1; ++i) {
       complexAsFloat[batch][i][threadIdx.x].template as<Complex>() = a[i];
     }
+  }
+
 }
 
 template <int BatchDims, int FFTSize, int BatchesPerBlock>
@@ -384,7 +430,7 @@ __device__ __forceinline__ void fbifft2DVertical(
   }
 
   // B. - F.
-  fbfft2DVerticalCore<FFTSize, BatchesPerBlock, true>(a);
+  fbfft2DVerticalCoreInverse<FFTSize, BatchesPerBlock, false>(a);
 
   // C. Write the results back to memory.
   // No need for conjugation as we know we have real results.
