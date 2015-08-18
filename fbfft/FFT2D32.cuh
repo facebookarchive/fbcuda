@@ -253,7 +253,7 @@ template<> void fft2dVertical<32, false>(Complex* a) {
 }
 
 //////////////////////////// FBFFT Generic ////////////////////////////////
-template <int FFTSize, int BatchesPerBlock>
+template <int FFTSize>
 __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
   constexpr int HalfFFTSize = FFTSize / 2;
 
@@ -315,7 +315,7 @@ __device__ inline void fbfft2DVerticalCoreForward(Complex* a) {
 }
 
 // Only unpack IFFT supported atm
-template <int FFTSize, int BatchesPerBlock, bool PackedInput = false>
+template <int FFTSize, bool PackedInput = false>
 __device__ inline void fbfft2DVerticalCoreInverse(Complex* a) {
   // Prepare horizontal FFT
   // Twiddles is the same as for 1D but fully data parallel across threadIdx.y
@@ -413,7 +413,7 @@ __device__ __forceinline__ void fbfft2DVertical(
   // FTSize / 2 complex
   // Hermitian packed symmetry is further used to pack 2 real FFTs
   // (a[0] and a[FFTSize / 2 - 1]) into a single complex FFT.
-  fbfft2DVerticalCoreForward<FFTSize, BatchesPerBlock>(a);
+  fbfft2DVerticalCoreForward<FFTSize>(a);
 
   // This latter symmetry needs unpacking to use with gemm routines.
   if (Unpack) {
@@ -471,7 +471,7 @@ __device__ __forceinline__ void fbifft2DVertical(
   }
 
   // Work it
-  fbfft2DVerticalCoreInverse<FFTSize, BatchesPerBlock, PackedInput>(a);
+  fbfft2DVerticalCoreInverse<FFTSize, PackedInput>(a);
 
   // Write the results back to memory.
   // No need for conjugation as we know we have real results.

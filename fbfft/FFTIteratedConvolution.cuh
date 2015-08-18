@@ -4,6 +4,56 @@
 
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
+// Notes:
+//
+// The following implementations are prototypes, do not exploit any reuse and
+// currently have bad performance. Their purpose is to be a baseline for
+// exploring the feasibility of single fused kernels that do not require any
+// device memory.
+//
+// The general structure of the code is a 5-D loop which exhibits reuse
+// across:
+//   - tiles, batches for weights
+//   - outputplanes for inputs
+//   - inputplanes for outputs
+////
+// When implemented with memory reuse in mind, these kernels stress out the
+// GPU resources.
+// For UpdateOutput, the 2 stressing factors are:
+//   - amount of shared memory required for a single block which is given by:
+//     InputPlUnroll x OutputPlUnroll x FFTSize / 2 x FFTSize x sizeof(Complex)
+//     In practice, for FFT sizes 32x32, a 4 x 4 unroll of InputPlUnroll x
+//     OutputPlUnroll requires 65K and does not fit in shared memory.
+//     So there is a tradeoff between amount of reuse, what fits into shared
+//     memory and precomputing weights in global memory.
+//   - amount of register used, number of threads in a threadblock within the
+//     limit of the 65K registers.
+//     A block has FFTSize x OutputPlUnroll x BatchUnroll threads.
+//     By limiting the kernel to use only 128 registers for FFT 32, we can fit
+//     32 x 2 x 8 threads in a block within the 64K register K40m budget.
+//
+// 32x32:
+//   This kernel takes up a lot of registers, by squeezing them we get to
+//   128 per thread. So we can only hope for 1 block per SM at any point.
+//   We must enforce the constrtains:
+//   FFTSize, BatchUnroll, InputUnroll, OutputUnroll
+//   FFTSize x BatchUnroll x OutputUnroll x 128 <= 65K
+//   FFTSize x FFTSize / 2 x InputUnroll x OutputUnroll x 8 <= 40K
+//
+// 16x16:
+//   This kernel can be squeezed within 64 registers per thread.
+//   So we can only aim for 2 blocks per SM.
+//   We must enforce the constrtains:
+//   FFTSize, BatchUnroll, InputUnroll, OutputUnroll
+//   FFTSize x BatchUnroll x OutputUnroll x 64 <= 32K
+//   FFTSize x FFTSize / 2 x InputUnroll x OutputUnroll x 8 <= 20K
+//
+// 8x8:
+//   This kernel spills badly within 32 registers per thread...
+//   But it does fit within 40 registers.
+//
+//////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////
 #include "cuda/Complex.cuh"
 #include "cuda/CudaUtils.cuh"
 #include "cuda/DeviceTensor.cuh"
@@ -13,8 +63,6 @@
 #include <cuda_runtime.h>
 
 #include <cassert>
-
-#include <glog/logging.h>
 
 namespace facebook { namespace cuda { namespace fbfft {
 
@@ -46,379 +94,528 @@ struct TiledDeviceTensors {
   TiledDeviceTensor<T, Dims> outputs[NumTiles];
 };
 
-template<int NumWarps, int NumTilesPerWarp, int FFTSize>
-__global__ void updateOutputIteratedKernel(
+template<int FFTSize>
+__device__ void updateOutputIteratedKernel(
     TiledDeviceTensor<float, 4>* ins,
     TiledDeviceTensor<float, 4>* outs,
     const DeviceTensor<float, 4> weight,
     size_t numTiles) {
 
-/*
+  constexpr float invNorm = 1.0f / (FFTSize * FFTSize);
+  const auto tileIndexStart = blockIdx.x;
+  const auto inputPlanes = weight.getSize(1);
+  const auto outputPlanes = weight.getSize(0);
 
-  // constexpr int NumWarps = (NumTiles / NumTilesPerWarp)
-  assert(numTiles % NumTilesPerWarp == 0);
+  const auto batch = blockIdx.z * blockDim.z + threadIdx.z;
+  const auto outputPl = blockIdx.y * blockDim.y + threadIdx.y;
 
-  // sharedMem[A] where A must be threadIdx.y == number of FFTs in parallel
-  // __shared__ float sharedMem[NumWarps][FFTSize][FFTSize + 1];
+  const auto tileIndex = tileIndexStart;
+  const auto& input = ins[tileIndex];
+  auto& output = outs[tileIndex];
 
-  const int batch = blockIdx.x;
-  const int outputPlane = blockIdx.y;
-  const int tileIndexStart = threadIdx.y * NumTilesPerWarp;
-  const float invNorm = 1.0f / (FFTSize * FFTSize);
+  // Early exits
+  if (batch >= input.tensor.getSize(0)) { return; }
+  if (outputPl >= outputPlanes) { return; }
 
-  for (int inputPlane = 0; inputPlane < weight.getSize(1); ++inputPlane) {
-    // A1. Read weights (o x i x h x w)
-    Complex wei[FFTSize];
-    for (int i = 0 ; i < FFTSize; ++i) {
-      wei[i] =
-        inBounds(i, threadIdx.x, 0, 0, weight) ?
-        Complex(weight[outputPlane]
-                [inputPlane]
-                [i - 0]
-                [threadIdx.x - 0].ldg()) :
-        Complex(0.0f, 0.0f);
+  Complex out[FFTSize / 2];
+#pragma unroll
+  for (int i = 0 ; i < FFTSize / 2; ++i) {
+    out[i] = Complex(0.0f);
+  }
+
+  for (int inputPl = 0; inputPl < inputPlanes; ++inputPl) {
+    Complex wei[FFTSize / 2];
+#pragma unroll
+    for (int i = 0 ; i < FFTSize; i += 2) {
+      float f1 = inBounds(i, threadIdx.x, 0, 0, weight) ?
+        weight
+        [outputPl][inputPl][i - 0][threadIdx.x - 0].ldg() :
+        0.0f;
+      float f2 = inBounds(i + 1, threadIdx.x, 0, 0, weight) ?
+        weight
+        [outputPl][inputPl][i + 1 - 0][threadIdx.x - 0].ldg() :
+        0.0f;
+      wei[i / 2] = Complex(f1, f2);
     }
 
-    // B1. In place FFTs via sharedMem (w x h format)
-    fbfft2DVerticalCore<FFTSize, 1, false>(wei);
+    fbfft2DVerticalCoreForward<FFTSize>(wei);
 
-    for (int tileIndexOuter = tileIndexStart;
-         tileIndexOuter < numTiles; tileIndexOuter += NumTilesPerWarp * NumWarps)
-    {{{
-          #pragma unroll
-          for (int tileIndex = tileIndexOuter;
-               tileIndex < tileIndexOuter + NumTilesPerWarp; ++tileIndex)
-          {{{
-                Complex out[FFTSize];
-                // Some extra nesting for readability
-                for (int i = 0; i < FFTSize; ++i) {
-                  out[i] = 0.0f;
-                }
+    Complex inp[FFTSize / 2];
+#pragma unroll
+    for (int i = 0 ; i < FFTSize; i += 2) {
+      float f1 =
+        inBounds(i, threadIdx.x, input.padU, input.padL, input.tensor) ?
+        input.tensor
+        [batch][inputPl][i - input.padU][threadIdx.x - input.padL].ldg() :
+        0.0f;
+      float f2 =
+        inBounds(i + 1, threadIdx.x, input.padU, input.padL, input.tensor) ?
+        input.tensor
+        [batch][inputPl][i + 1 - input.padU][threadIdx.x - input.padL].ldg() :
+        0.0f;
+      inp[i / 2] = Complex(f1, f2);
+    }
 
-                // A2. Read input (b x i x h x w)
-                Complex in[FFTSize];
-                const TiledDeviceTensor<float, 4>& tdi = ins[tileIndex];
-                for (int i = 0 ; i < FFTSize; ++i) {
-                  in[i] =
-                    inBounds(i, threadIdx.x, tdi.padU, tdi.padL, tdi.tensor) ?
-                    Complex(tdi.tensor[batch]
-                            [inputPlane]
-                            [i - tdi.padU]
-                            [threadIdx.x - tdi.padL].ldg()) :
-                    Complex(0.0f, 0.0f);
-                }
+    fbfft2DVerticalCoreForward<FFTSize>(inp);
 
-                // B2. In place FFTs via sharedMem (w x h format)
-                fbfft2DVerticalCore<FFTSize, 1, false>(in);
+    // First element packs 2 real into a complex, don't get fooled
+    Complex tmpin, tmpwei;
+    if (threadIdx.x > 0) {
+      Complex otherinp = shfl(inp[0], FFTSize - threadIdx.x, FFTSize);
+      Complex inp0  = Complex(0.5f) * (otherinp.conjugate() + inp[0]);
+      Complex inpN2 =
+        Complex(0.5f) *
+        (otherinp.conjugate() - inp[0]).conjugate().transpose();
+      Complex otherwei = shfl(wei[0], FFTSize - threadIdx.x, FFTSize);
+      Complex wei0  = Complex(0.5f) * (otherwei.conjugate() + wei[0]);
+      Complex weiN2 =
+        Complex(0.5f) *
+        (otherwei.conjugate() - wei[0]).conjugate().transpose();
+      Complex out0  = inp0  * wei0.conjugate();
+      Complex outN2 = inpN2 * weiN2.conjugate();
+      out[0] += out0 + outN2.conjugate().transpose();
+    } else {
+      out[0] +=
+        Complex(inp[0].re() * wei[0].re(),
+                inp[0].im() * wei[0].im());
+    }
 
-                // C. Pointwise multiply and conjugation
-                for (int i = 0; i < FFTSize; ++i) {
-                  out[i] += in[i] * wei[i].conjugate();
-                }
+#pragma unroll
+    for (int i = 1; i < FFTSize / 2; ++i) {
+      out[i] += inp[i] * wei[i].conjugate();
+    }
+  } // inputPl
 
-                // D. IFFT out the chunk in place as an fft (i.e. conjugation)
-                for (int i = 0; i < FFTSize; ++i) {
-                  out[i] = out[i].conjugate();
-                }
+  fbfft2DVerticalCoreInverse<FFTSize, true>(out);
 
-                fbfft2DVerticalCore<FFTSize, 1, true>(out);
-
-                float notIsFirstInputPlane = (inputPlane == 0) ? 0.0f : 1.0f;
-                TiledDeviceTensor<float, 4>& tdo = outs[tileIndex];
-                for (int i = 0 ; i < FFTSize; ++i) {
-                  if (inBounds(i, threadIdx.x, tdo.padU, tdo.padL, tdo.tensor)) {
-                    tdo.tensor[batch]
-                              [outputPlane]
-                              [i - tdo.padU]
-                              [threadIdx.x - tdo.padL] =
-                      notIsFirstInputPlane *
-                      tdo.tensor[batch]
-                                [outputPlane]
-                                [i - tdo.padU]
-                                [threadIdx.x - tdo.padL] +
-                      out[i].re() * invNorm;
-
-                  }
-                }
-
-              }}} // for tileIndex
-        }}} // for tileIndexOuter
-  } // for inputPlaneOuter
-
-*/
+  // Write the results back to memory.
+  // No need for conjugation as we know we have real results.
+#pragma unroll
+  for (int i = 0 ; i < FFTSize; i += 2) {
+    if (inBounds(i, threadIdx.x, output.padU, output.padL, output.tensor)) {
+      output.tensor
+        [batch][outputPl][i - output.padU][threadIdx.x - output.padL] =
+        out[i / 2].re() * invNorm;
+    }
+    if (inBounds(i + 1, threadIdx.x, output.padU, output.padL, output.tensor)) {
+      output.tensor
+        [batch][outputPl][i + 1 - output.padU][threadIdx.x - output.padL] =
+        out[i / 2].im() * invNorm;
+    }
+  }
 
 }
 
 
-template<int NumWarps, int NumTilesPerWarp, int FFTSize>
-__global__ void updateGradInputIteratedKernel(
+
+__launch_bounds__(512, 1) // 128 registers
+__global__ void updateOutputIteratedKernel32(
+    TiledDeviceTensor<float, 4>* ins,
+    TiledDeviceTensor<float, 4>* outs,
+    const DeviceTensor<float, 4> weight,
+    size_t numTiles)
+{
+  updateOutputIteratedKernel<32>(
+    ins,
+    outs,
+    weight,
+    numTiles);
+}
+
+__launch_bounds__(1024, 1) // 64 registers
+__global__ void updateOutputIteratedKernel16(
+    TiledDeviceTensor<float, 4>* ins,
+    TiledDeviceTensor<float, 4>* outs,
+    const DeviceTensor<float, 4> weight,
+    size_t numTiles)
+{
+  updateOutputIteratedKernel<16>(
+    ins,
+    outs,
+    weight,
+    numTiles);
+}
+
+__launch_bounds__(425, 3) // 40 registers
+__global__ void updateOutputIteratedKernel8(
+    TiledDeviceTensor<float, 4>* ins,
+    TiledDeviceTensor<float, 4>* outs,
+    const DeviceTensor<float, 4> weight,
+    size_t numTiles)
+{
+  updateOutputIteratedKernel<8>(
+    ins,
+    outs,
+    weight,
+    numTiles);
+}
+
+
+template<int FFTSize>
+__device__ void updateGradInputIteratedKernel(
     TiledDeviceTensor<float, 4>* ins,
     TiledDeviceTensor<float, 4>* outs,
     const DeviceTensor<float, 4> weight,
     size_t numTiles) {
 
-/*
+  constexpr float invNorm = 1.0f / (FFTSize * FFTSize);
+  const auto tileIndexStart = blockIdx.x;
+  const auto inputPlanes = weight.getSize(1);
+  const auto outputPlanes = weight.getSize(0);
 
-  // sharedMem[A] where A must be threadIdx.y == number of FFTs in parallel
-  // __shared__ float sharedMem[NumWarps][FFTSize][FFTSize + 1];
+  const auto batch = blockIdx.z * blockDim.z + threadIdx.z;
+  const auto inputPl = blockIdx.y * blockDim.y + threadIdx.y;
 
-  const int batch = blockIdx.x;
-  const int inputPlane = blockIdx.y;
-  const int tileIndexStart = threadIdx.y * NumTilesPerWarp;
-  const float invNorm = 1.0f / (FFTSize * FFTSize);
+  const auto tileIndex = tileIndexStart;
+  auto& input = ins[tileIndex];
+  const auto& output = outs[tileIndex];
 
-  for (int outputPlane = 0; outputPlane < weight.getSize(0); ++outputPlane) {
-    Complex wei[FFTSize];
+  // Early exits
+  if (batch >= input.tensor.getSize(0)) { return; }
+  if (inputPl >= weight.getSize(1)) { return; }
 
-    for (int tileIndexOuter = tileIndexStart;
-         tileIndexOuter < numTiles; tileIndexOuter += NumTilesPerWarp * NumWarps)
-    {{{
-          #pragma unroll
-          for (int tileIndex = tileIndexOuter;
-               tileIndex < tileIndexOuter + NumTilesPerWarp; ++tileIndex)
-          {{{
-                // Some extra nesting for readability
-                Complex in[FFTSize];
-                for (int i = 0; i < FFTSize; ++i) {
-                  in[i] = 0.0f;
-                }
+  Complex inp[FFTSize / 2];
+#pragma unroll
+  for (int i = 0 ; i < FFTSize / 2; ++i) {
+    inp[i] = Complex(0.0f);
+  }
 
-                // A1. Read weights (o x i x h x w)
-                for (int i = 0 ; i < FFTSize; ++i) {
-                  wei[i] =
-                    inBounds(i, threadIdx.x, 0, 0, weight) ?
-                    Complex(weight[outputPlane]
-                                  [inputPlane]
-                                  [i - 0]
-                                  [threadIdx.x - 0].ldg()) :
-                    Complex(0.0f, 0.0f);
-                }
+  for (int outputPl = 0; outputPl < outputPlanes; ++outputPl) {
+    Complex wei[FFTSize / 2];
+#pragma unroll
+    for (int i = 0 ; i < FFTSize; i += 2) {
+      float f1 = inBounds(i, threadIdx.x, 0, 0, weight) ?
+        weight
+        [outputPl][inputPl][i - 0][threadIdx.x - 0].ldg() :
+        0.0f;
+      float f2 = inBounds(i + 1, threadIdx.x, 0, 0, weight) ?
+        weight
+        [outputPl][inputPl][i + 1 - 0][threadIdx.x - 0].ldg() :
+        0.0f;
+      wei[i / 2] = Complex(f1, f2);
+    }
+    fbfft2DVerticalCoreForward<FFTSize>(wei);
 
-                Complex out[FFTSize];
-                // A2. Read input (b x i x h x w)
-                const TiledDeviceTensor<float, 4>& tdo = outs[tileIndex];
-                for (int i = 0 ; i < FFTSize; ++i) {
-                  out[i] =
-                    inBounds(i, threadIdx.x, tdo.padU, tdo.padL, tdo.tensor) ?
-                    Complex(tdo.tensor[batch]
-                                      [outputPlane]
-                                      [i - tdo.padU]
-                                      [threadIdx.x - tdo.padL].ldg()) :
-                    Complex(0.0f, 0.0f);
-                }
+    Complex out[FFTSize / 2];
+#pragma unroll
+    for (int i = 0 ; i < FFTSize; i += 2) {
+      float f1 =
+        inBounds(i, threadIdx.x, output.padU, output.padL, output.tensor) ?
+        output.tensor
+        [batch][outputPl][i - output.padU][threadIdx.x - output.padL].ldg() :
+        0.0f;
+      float f2 =
+        inBounds(i + 1, threadIdx.x, output.padU, output.padL, output.tensor) ?
+        output.tensor
+        [batch][outputPl][i + 1 - output.padU][threadIdx.x - output.padL].ldg() :
+        0.0f;
+      out[i / 2] = Complex(f1, f2);
+    }
+    fbfft2DVerticalCoreForward<FFTSize>(out);
 
-                // B1. In place FFTs via sharedMem (w x h format)
-                fbfft2DVerticalCore<FFTSize, 1, false>(wei);
+    // First element packs 2 real into a complex, don't get fooled
+    Complex tmpin, tmpwei;
+    if (threadIdx.x > 0) {
+      Complex otherout = shfl(out[0], FFTSize - threadIdx.x, FFTSize);
+      Complex out0  = Complex(0.5f) * (otherout.conjugate() + out[0]);
+      Complex outN2 =
+        Complex(0.5f) *
+        (otherout.conjugate() - out[0]).conjugate().transpose();
+      Complex otherwei = shfl(wei[0], FFTSize - threadIdx.x, FFTSize);
+      Complex wei0  = Complex(0.5f) * (otherwei.conjugate() + wei[0]);
+      Complex weiN2 =
+        Complex(0.5f) *
+        (otherwei.conjugate() - wei[0]).conjugate().transpose();
+      Complex in0  = out0  * wei0;
+      Complex inN2 = outN2 * weiN2;
+      inp[0] += in0 + inN2.conjugate().transpose();
+    } else {
+      inp[0] +=
+        Complex(out[0].re() * wei[0].re(),
+                out[0].im() * wei[0].im());
+    }
 
-                // B2. In place FFTs via sharedMem (w x h format)
-                fbfft2DVerticalCore<FFTSize, 1, false>(out);
+#pragma unroll
+    for (int i = 1; i < FFTSize / 2; ++i) {
+      inp[i] += out[i] * wei[i];
+    }
 
-                // C. Pointwise multiply and conjugation
-                for (int i = 0; i < FFTSize; ++i) {
-                  in[i] += out[i] * wei[i];
-                }
+  } // inputPl
 
-                // D. IFFT out the chunk in place as an fft (i.e. conjugation)
-                for (int i = 0; i < FFTSize; ++i) {
-                  in[i] = in[i].conjugate();
-                }
-                fbfft2DVerticalCore<FFTSize, 1, true>(in);
+  fbfft2DVerticalCoreInverse<FFTSize, true>(inp);
 
-                float notIsFirstOutputPlane = (outputPlane == 0) ? 0.0f : 1.0f;
-                TiledDeviceTensor<float, 4>& tdi = ins[tileIndex];
-                for (int i = 0 ; i < FFTSize; ++i) {
-                  if (inBounds(i, threadIdx.x, tdi.padU, tdi.padL, tdi.tensor)) {
-                    tdi.tensor[batch]
-                              [inputPlane]
-                              [i - tdi.padU]
-                              [threadIdx.x - tdi.padL] =
-                      notIsFirstOutputPlane *
-                      tdi.tensor[batch]
-                                [inputPlane]
-                                [i - tdi.padU]
-                                [threadIdx.x - tdi.padL] +
-                      in[i].re() * invNorm;
+  // Write the results back to memory.
+  // No need for conjugation as we know we have real results.
+#pragma unroll
+  for (int i = 0 ; i < FFTSize; i += 2) {
+    if (inBounds(i, threadIdx.x, input.padU, input.padL, input.tensor)) {
+      input.tensor
+        [batch][inputPl][i - input.padU][threadIdx.x - input.padL] =
+        inp[i / 2].re() * invNorm;
+    }
+    if (inBounds(i + 1, threadIdx.x, input.padU, input.padL, input.tensor)) {
+      input.tensor
+        [batch][inputPl][i + 1 - input.padU][threadIdx.x - input.padL] =
+        inp[i / 2].im() * invNorm;
+    }
+  }
 
-                  }
-                }
-              }}} // for tileIndex
-        }}} // for tileIndexOuter
-  } // for outputPlane
+}
 
-*/
+__launch_bounds__(512, 1) // 128 registers
+__global__ void updateGradInputIteratedKernel32(
+    TiledDeviceTensor<float, 4>* ins,
+    TiledDeviceTensor<float, 4>* outs,
+    const DeviceTensor<float, 4> weight,
+    size_t numTiles)
+{
+  updateGradInputIteratedKernel<32>(
+    ins,
+    outs,
+    weight,
+    numTiles);
+}
 
+__launch_bounds__(512, 1) // 128 registers
+__global__ void updateGradInputIteratedKernel16(
+    TiledDeviceTensor<float, 4>* ins,
+    TiledDeviceTensor<float, 4>* outs,
+    const DeviceTensor<float, 4> weight,
+    size_t numTiles)
+{
+  updateGradInputIteratedKernel<16>(
+    ins,
+    outs,
+    weight,
+    numTiles);
+}
+
+__launch_bounds__(1024, 1) // 64 registers
+__global__ void updateGradInputIteratedKernel8(
+    TiledDeviceTensor<float, 4>* ins,
+    TiledDeviceTensor<float, 4>* outs,
+    const DeviceTensor<float, 4> weight,
+    size_t numTiles)
+{
+  updateGradInputIteratedKernel<8>(
+    ins,
+    outs,
+    weight,
+    numTiles);
 }
 
 
 
-template<int NumWarps, int NumTilesPerWarp, int FFTSize>
-__global__ void accGradParametersIteratedKernel(
+template<int FFTSize>
+__device__ void accGradParametersIteratedKernel(
     TiledDeviceTensor<float, 4>* ins,
     TiledDeviceTensor<float, 4>* outs,
     DeviceTensor<float, 4> weight,
     size_t numTiles,
     float scale) {
 
-/*
+  const float invNormScale = scale / (FFTSize * FFTSize);
+  const auto inputPlanes = weight.getSize(1);
+  const auto outputPlanes = weight.getSize(0);
 
-  // sharedMem[A] where A must be threadIdx.y == number of FFTs in parallel
-  __shared__ float sharedMem[NumWarps][FFTSize][FFTSize + 1];
+  const auto inputPl = blockIdx.y * blockDim.y + threadIdx.y;
+  const auto outputPl = blockIdx.z * blockDim.z + threadIdx.z;
 
-  const int outputPlane = blockIdx.x;
-  const int inputPlane = blockIdx.y;
-  const int tileIndexStart = threadIdx.y * NumTilesPerWarp;
-  const float invNorm = 1.0f / (FFTSize * FFTSize);
-
-  Complex wei[FFTSize];
-  Complex in[FFTSize];
-  Complex out[FFTSize];
-
-  #pragma unroll
-  for (int i = 0; i < FFTSize; ++i) {
-    wei[i] = 0.0f;
+  Complex wei[FFTSize / 2 + 1];
+#pragma unroll
+  for (int i = 0 ; i < FFTSize / 2; ++i) {
+    wei[i] = Complex(0.0f);
   }
+  wei[FFTSize / 2] = Complex(0.0f);
 
-  for (int batch = 0; batch < ins[0].tensor.getSize(0); ++batch) {
-    for (int tileIndexOuter = tileIndexStart;
-         tileIndexOuter < numTiles; tileIndexOuter += NumTilesPerWarp * NumWarps)
-    {{{
-          #pragma unroll
-          for (int tileIndex = tileIndexOuter;
-               tileIndex < tileIndexOuter + NumTilesPerWarp; ++tileIndex)
-          {{{
+  for (int tileIndex = 0; tileIndex < numTiles; ++tileIndex) {
 
-                // Some extra nesting for readability
-                // A1. Read input (b x i x h x w)
-                const TiledDeviceTensor<float, 4>& tdi = ins[tileIndex];
-                #pragma unroll
-                for (int i = 0 ; i < FFTSize; ++i) {
-                  in[i] =
-                    inBounds(i, threadIdx.x, tdi.padU, tdi.padL, tdi.tensor) ?
-                    Complex(tdi.tensor[batch]
-                                      [inputPlane]
-                                      [i - tdi.padU]
-                                      [threadIdx.x - tdi.padL].ldg()) :
-                    Complex(0.0f, 0.0f);
-                }
+    const auto& input = ins[tileIndex];
+    const auto& output = outs[tileIndex];
 
-                // A2. Read gradOutput (b x i x h x w)
-                const TiledDeviceTensor<float, 4>& tdo = outs[tileIndex];
-                #pragma unroll
-                for (int i = 0 ; i < FFTSize; ++i) {
-                  out[i] =
-                    inBounds(i, threadIdx.x, tdo.padU, tdo.padL, tdo.tensor) ?
-                    Complex(tdo.tensor[batch]
-                                      [outputPlane]
-                                      [i - tdo.padU]
-                                      [threadIdx.x - tdo.padL].ldg()) :
-                    Complex(0.0f, 0.0f);
-                }
+    // Early exits
+    if (inputPl >= inputPlanes) { return; }
+    if (outputPl >= outputPlanes) { return; }
 
+    const auto Batches = input.tensor.getSize(0);
 
-                // B1. In place FFTs via sharedMem (w x h format)
-                fbfft2DVerticalCore<FFTSize, 1, false>(in);
+    for (int batch = 0; batch < Batches; ++batch) {
 
-                // B2. In place FFTs via sharedMem (w x h format)
-                fbfft2DVerticalCore<FFTSize, 1, false>(out);
-
-                // C. Pointwise multiply and conjugation
-                // invNorm and scale only the local contribution
-                #pragma unroll
-                for (int i = 0; i < FFTSize; ++i) {
-                  wei[i] += (in[i] * out[i].conjugate());
-                }
-              }}} // for tileIndex
-        }}} // for tileIndexOuter
-  } // for outputPlaneOuter
-
-  // D. IFFT out the chunk in place as an fft (i.e. needs conjugation)
-  #pragma unroll
-  for (int i = 0; i < FFTSize; ++i) {
-    wei[i] = wei[i].conjugate() * (invNorm * scale);
-  }
-  fbfft2DVerticalCore<FFTSize, 1, true>(wei);
-
-  // Need to reduce across threadIdx.y
-  #pragma unroll
-  for (int i = NumWarps - 1; i >= 0; --i) {
-    if (i == threadIdx.y) {
-      if (i == NumWarps - 1) {
-        #pragma unroll
-        for (int j = 0; j < FFTSize; ++j) {
-          sharedMem[0][j][threadIdx.x] = wei[j].re();
-        }
-      } else if (i != 0) {
-        #pragma unroll
-        for (int j = 0; j < FFTSize; ++j) {
-          sharedMem[0][j][threadIdx.x] += wei[j].re();
-        }
-      } else { // threadIdx.y == 0
-        #pragma unroll
-        for (int j = 0; j < FFTSize; ++j) {
-          wei[j].re() += sharedMem[0][j][threadIdx.x];
-        }
+      Complex out[FFTSize / 2 + 1];
+#pragma unroll
+      for (int i = 0 ; i < FFTSize; i += 2) {
+        float f1 =
+          inBounds(i, threadIdx.x, output.padU, output.padL, output.tensor) ?
+          output.tensor
+          [batch][outputPl][i - output.padU][threadIdx.x - output.padL].ldg() :
+          0.0f;
+        float f2 =
+          inBounds(i + 1, threadIdx.x, output.padU, output.padL, output.tensor) ?
+          output.tensor
+          [batch][outputPl][i + 1 - output.padU][threadIdx.x - output.padL].ldg() :
+          0.0f;
+        out[i / 2] = Complex(f1, f2);
       }
+      out[FFTSize / 2] = Complex(0.0f);
+      fbfft2DVerticalCoreForward<FFTSize>(out);
+
+
+      Complex inp[FFTSize / 2 + 1];
+#pragma unroll
+      for (int i = 0 ; i < FFTSize; i += 2) {
+        float f1 =
+          inBounds(i, threadIdx.x, input.padU, input.padL, input.tensor) ?
+          input.tensor
+          [batch][inputPl][i - input.padU][threadIdx.x - input.padL].ldg() :
+          0.0f;
+        float f2 =
+          inBounds(i + 1, threadIdx.x, input.padU, input.padL, input.tensor) ?
+          input.tensor
+          [batch][inputPl][i + 1 - input.padU][threadIdx.x - input.padL].ldg() :
+          0.0f;
+        inp[i / 2] = Complex(f1, f2);
+      }
+
+      inp[FFTSize / 2] = Complex(0.0f);
+      fbfft2DVerticalCoreForward<FFTSize>(inp);
+
+      // First element packs 2 real into a complex, don't get fooled
+      Complex tmpin, tmpwei;
+      if (threadIdx.x > 0) {
+        // Unpack
+        Complex otherinp = shfl(inp[0], FFTSize - threadIdx.x, FFTSize);
+        inp[FFTSize / 2] = Complex(0.5f) *
+          (otherinp.conjugate() - inp[0]).conjugate().transpose();
+        inp[0]  = Complex(0.5f) * (otherinp.conjugate() + inp[0]);
+        // Unpack
+        Complex otherout = shfl(out[0], FFTSize - threadIdx.x, FFTSize);
+        out[FFTSize / 2] = Complex(0.5f) *
+          (otherout.conjugate() - out[0]).conjugate().transpose();
+        out[0]  = Complex(0.5f) * (otherout.conjugate() + out[0]);
+      } else {
+        inp[FFTSize / 2] = Complex(inp[0].im());
+        inp[0]  = Complex(inp[0].re());
+        out[FFTSize / 2] = Complex(out[0].im());
+        out[0]  = Complex(out[0].re());
+      }
+
+#pragma unroll
+      for (int i = 0; i < FFTSize / 2 + 1; ++i) {
+        wei[i] += inp[i] * out[i].conjugate();
+      }
+    } // batches
+  } // tileIndex
+
+  fbfft2DVerticalCoreInverse<FFTSize, false>(wei);
+
+  // Write the results back to memory.
+  // No need for conjugation as we know we have real results.
+#pragma unroll
+  for (int i = 0 ; i < FFTSize; i += 2) {
+    if (inBounds(i, threadIdx.x, 0, 0, weight)) {
+      weight[outputPl][inputPl][i - 0][threadIdx.x - 0] =
+        wei[i / 2].re() * invNormScale;
     }
-    __syncthreads();
-  }
-
-  // Only threadIdx.y == 0 writes to memory
-  if (threadIdx.y == 0) {
-    #pragma unroll
-    for (int i = 0 ; i < FFTSize; ++i) {
-      if (inBounds(i, threadIdx.x, 0, 0, weight)) {
-        weight[outputPlane]
-              [inputPlane]
-              [i - 0]
-              [threadIdx.x - 0] = wei[i].re();
-      }
+    if (inBounds(i + 1, threadIdx.x, 0, 0, weight)) {
+      weight[outputPl][inputPl][i + 1 - 0][threadIdx.x - 0] =
+        wei[i / 2].im() * invNormScale;
     }
   }
+}
 
-*/
 
+__launch_bounds__(512, 1) // 128 registers
+__global__ void accGradParametersIteratedKernel32(
+    TiledDeviceTensor<float, 4>* ins,
+    TiledDeviceTensor<float, 4>* outs,
+    DeviceTensor<float, 4> weight,
+    size_t numTiles,
+    float scale) {
+  accGradParametersIteratedKernel<32>(
+    ins,
+    outs,
+    weight,
+    numTiles,
+    scale);
+}
+
+__launch_bounds__(512, 1) // 128 registers
+__global__ void accGradParametersIteratedKernel16(
+    TiledDeviceTensor<float, 4>* ins,
+    TiledDeviceTensor<float, 4>* outs,
+    DeviceTensor<float, 4> weight,
+    size_t numTiles,
+    float scale) {
+  accGradParametersIteratedKernel<16>(
+    ins,
+    outs,
+    weight,
+    numTiles,
+    scale);
+}
+
+__launch_bounds__(1024, 1) // 64 registers
+__global__ void accGradParametersIteratedKernel8(
+    TiledDeviceTensor<float, 4>* ins,
+    TiledDeviceTensor<float, 4>* outs,
+    DeviceTensor<float, 4> weight,
+    size_t numTiles,
+    float scale) {
+  accGradParametersIteratedKernel<8>(
+    ins,
+    outs,
+    weight,
+    numTiles,
+    scale);
 }
 
 
 
+constexpr int ceil(int num, int denom) {
+  return (num + denom - 1) / denom;
+}
 
-#define STATIC_CEIL(N, DIV) (int) ((N + DIV - 1) / DIV)
-
-#define INST_UPDATE_OUTPUT_ITERATED(NUM_WARPS, NUM_TILES_PER_WARP)      \
-  if (numTiles % (NUM_WARPS * NUM_TILES_PER_WARP) == 0) {               \
-    /*                batch             x     outputPlanes       */     \
-    dim3 blocks(batchSize, weight.getSize(0));                          \
-    dim3 threads(FFTSize, NUM_WARPS);                                   \
-    updateOutputIteratedKernel<NUM_WARPS,                               \
-                               NUM_TILES_PER_WARP,                      \
-                               FFTSize>                                 \
-      <<<blocks, threads, 0, s>>>(ins, outs, weight, numTiles);         \
-    return true;                                                        \
+#define INST_UPDATE_OUTPUT_ITERATED(FFTSIZE, BUNROLL, IUNROLL, OUNROLL) \
+  {                                                                     \
+    dim3 blocks(numTiles,                                               \
+                ceil(outputPlanes, OUNROLL),                            \
+                ceil(batchSize, BUNROLL));                              \
+    dim3 threads(FFTSIZE, OUNROLL, BUNROLL);                            \
+    updateOutputIteratedKernel##FFTSIZE                                 \
+      <<<blocks, threads, 0, s>>>(ins,                                  \
+                                  outs,                                 \
+                                  weight,                               \
+                                  numTiles);                            \
+      return true;                                                      \
   }
 
-#define INST_UPDATE_GRAD_INPUT_ITERATED(NUM_WARPS, NUM_TILES_PER_WARP)  \
-  if (numTiles % (NUM_WARPS * NUM_TILES_PER_WARP) == 0) {               \
-    /*                batch             x     inputPlanes       */      \
-    dim3 blocks(batchSize, weight.getSize(1));                          \
-    dim3 threads(FFTSize, NUM_WARPS);                                   \
-    updateGradInputIteratedKernel<NUM_WARPS,                            \
-                                  NUM_TILES_PER_WARP,                   \
-                                  FFTSize>                              \
-      <<<blocks, threads, 0, s>>>(ins, outs, weight, numTiles);         \
-    return true;                                                        \
+#define INST_UPDATE_GRAD_INPUT_ITERATED(FFTSIZE, BUNROLL, IUNROLL, OUNROLL) \
+  {                                                                     \
+    dim3 blocks(numTiles,                                               \
+                ceil(inputPlanes, IUNROLL),                             \
+                ceil(batchSize, BUNROLL));                              \
+    dim3 threads(FFTSIZE, IUNROLL, BUNROLL);                            \
+    updateGradInputIteratedKernel##FFTSIZE                              \
+      <<<blocks, threads, 0, s>>>(ins,                                  \
+                                  outs,                                 \
+                                  weight,                               \
+                                  numTiles);                            \
+      return true;                                                      \
   }
 
-#define INST_ACC_GRAD_PARAMETERS_ITERATED(NUM_WARPS, NUM_TILES_PER_WARP) \
-  if (numTiles % (NUM_WARPS * NUM_TILES_PER_WARP) == 0) {               \
-    /*           outputPlanes    x     inputPlanes          */          \
-    dim3 blocks(weight.getSize(0), weight.getSize(1));                  \
-    dim3 threads(FFTSize, NUM_WARPS);                                   \
-    accGradParametersIteratedKernel<NUM_WARPS,                          \
-                                    NUM_TILES_PER_WARP,                 \
-                                    FFTSize>                            \
-      <<<blocks, threads, 0, s>>>(                                      \
-        ins, outs, weight, numTiles, scale);                            \
-    return true;                                                        \
+#define INST_ACC_GRAD_PARAMETERS_ITERATED(FFTSIZE, BUNROLL, IUNROLL, OUNROLL) \
+  {                                                                     \
+    dim3 blocks(1, /* Accumulate so must always be 1! */                \
+                ceil(inputPlanes, IUNROLL),                             \
+                ceil(outputPlanes, OUNROLL));                           \
+    dim3 threads(FFTSIZE, IUNROLL, OUNROLL);                            \
+    accGradParametersIteratedKernel##FFTSIZE                            \
+      <<<blocks, threads, 0, s>>>(ins,                                  \
+                                  outs,                                 \
+                                  weight,                               \
+                                  numTiles,                             \
+                                  scale);                               \
+      return true;                                                      \
   }
 
 
@@ -450,44 +647,33 @@ template<> bool FFTIteratedConvolution<8>(
     size_t numTiles,
     cudaStream_t s) {
 
-#define FFTSize 8
+  const auto inputPlanes = weight.getSize(1);
+  const auto outputPlanes = weight.getSize(0);
 
+  // Don't forget to init your twiddles
+  facebook::cuda::fbfft::initTwiddles();
+
+  constexpr int FFTSize = 8;
   if (pass.pass == pass.FFT_UpdateOutput) {
     CHECK_LE(1, numTiles);
     CHECK_LE(1, weight.getSize(0));
     CHECK_LE(1, FFTSize);
-
-    // Tune which sizes to use in practice
-    // INST_UPDATE_OUTPUT_ITERATED(5, 5);
-    // INST_UPDATE_OUTPUT_ITERATED(4, 4);
-    // INST_UPDATE_OUTPUT_ITERATED(3, 3);
-    // INST_UPDATE_OUTPUT_ITERATED(2, 2);
-    INST_UPDATE_OUTPUT_ITERATED(1, 1);
+    INST_UPDATE_OUTPUT_ITERATED(8, 4, 4, 4);
   }
 
   if (pass.pass == pass.FFT_UpdateGradInput) {
     CHECK_LE(1, numTiles);
     CHECK_LE(1, weight.getSize(0));
     CHECK_LE(1, FFTSize);
-
-    // Tune which sizes to use in practice
-    // INST_UPDATE_GRAD_INPUT_ITERATED(5, 5);
-    // INST_UPDATE_GRAD_INPUT_ITERATED(4, 4);
-    // INST_UPDATE_GRAD_INPUT_ITERATED(3, 3);
-    // INST_UPDATE_GRAD_INPUT_ITERATED(2, 2);
-    INST_UPDATE_GRAD_INPUT_ITERATED(1, 1);
+    INST_UPDATE_GRAD_INPUT_ITERATED(8, 4, 4, 4);
   }
 
   if (pass.pass == pass.FFT_AccGradParameters) {
     CHECK_LE(1, weight.getSize(0));
     CHECK_LE(1, weight.getSize(1));
     CHECK_LE(1, FFTSize);
-
-    // Tune which sizes to use in practice
-    INST_ACC_GRAD_PARAMETERS_ITERATED(1, 1);
+    INST_ACC_GRAD_PARAMETERS_ITERATED(8, 1, 4, 4);
   }
-
-#undef FFTSize
 
   return false;
 }
@@ -502,44 +688,33 @@ template<> bool FFTIteratedConvolution<16>(
     size_t numTiles,
     cudaStream_t s) {
 
-#define FFTSize 16
+  const auto inputPlanes = weight.getSize(1);
+  const auto outputPlanes = weight.getSize(0);
 
+  // Don't forget to init your twiddles
+  facebook::cuda::fbfft::initTwiddles();
+
+  constexpr int FFTSize = 16;
   if (pass.pass == pass.FFT_UpdateOutput) {
     CHECK_LE(1, numTiles);
     CHECK_LE(1, weight.getSize(0));
     CHECK_LE(1, FFTSize);
-
-    // Tune which sizes to use in practice
-    // INST_UPDATE_OUTPUT_ITERATED(5, 5);
-    // INST_UPDATE_OUTPUT_ITERATED(4, 4);
-    // INST_UPDATE_OUTPUT_ITERATED(3, 3);
-    // INST_UPDATE_OUTPUT_ITERATED(2, 2);
-    INST_UPDATE_OUTPUT_ITERATED(1, 1);
+    INST_UPDATE_OUTPUT_ITERATED(16, 8, 4, 4);
   }
 
   if (pass.pass == pass.FFT_UpdateGradInput) {
     CHECK_LE(1, numTiles);
     CHECK_LE(1, weight.getSize(0));
     CHECK_LE(1, FFTSize);
-
-    // Tune which sizes to use in practice
-    // INST_UPDATE_GRAD_INPUT_ITERATED(5, 5);
-    // INST_UPDATE_GRAD_INPUT_ITERATED(4, 4);
-    // INST_UPDATE_GRAD_INPUT_ITERATED(3, 3);
-    // INST_UPDATE_GRAD_INPUT_ITERATED(2, 2);
-    INST_UPDATE_GRAD_INPUT_ITERATED(1, 1);
+    INST_UPDATE_GRAD_INPUT_ITERATED(16, 8, 4, 4);
   }
 
   if (pass.pass == pass.FFT_AccGradParameters) {
     CHECK_LE(1, weight.getSize(0));
     CHECK_LE(1, weight.getSize(1));
     CHECK_LE(1, FFTSize);
-
-    // Tune which sizes to use in practice
-    INST_ACC_GRAD_PARAMETERS_ITERATED(1, 1);
+    INST_ACC_GRAD_PARAMETERS_ITERATED(16, 1, 2, 2);
   }
-
-#undef FFTSize
 
   return false;
 }
@@ -554,49 +729,37 @@ template<> bool FFTIteratedConvolution<32>(
     size_t numTiles,
     cudaStream_t s) {
 
-#define FFTSize 32
+  const auto inputPlanes = weight.getSize(1);
+  const auto outputPlanes = weight.getSize(0);
 
+  // Don't forget to init your twiddles
+  facebook::cuda::fbfft::initTwiddles();
+
+  constexpr int FFTSize = 32;
   if (pass.pass == pass.FFT_UpdateOutput) {
     CHECK_LE(1, numTiles);
     CHECK_LE(1, weight.getSize(0));
     CHECK_LE(1, FFTSize);
-
-    // Tune which sizes to use in practice
-    // INST_UPDATE_OUTPUT_ITERATED(5, 5);
-    // INST_UPDATE_OUTPUT_ITERATED(4, 4);
-    // INST_UPDATE_OUTPUT_ITERATED(3, 3);
-    // INST_UPDATE_OUTPUT_ITERATED(2, 2);
-    INST_UPDATE_OUTPUT_ITERATED(1, 1);
+    INST_UPDATE_OUTPUT_ITERATED(32, 8, 4, 2);
   }
 
   if (pass.pass == pass.FFT_UpdateGradInput) {
     CHECK_LE(1, numTiles);
     CHECK_LE(1, weight.getSize(0));
     CHECK_LE(1, FFTSize);
-
-    // Tune which sizes to use in practice
-    // INST_UPDATE_GRAD_INPUT_ITERATED(5, 5);
-    // INST_UPDATE_GRAD_INPUT_ITERATED(4, 4);
-    // INST_UPDATE_GRAD_INPUT_ITERATED(3, 3);
-    // INST_UPDATE_GRAD_INPUT_ITERATED(2, 2);
-    INST_UPDATE_GRAD_INPUT_ITERATED(1, 1);
+    INST_UPDATE_GRAD_INPUT_ITERATED(32, 8, 2, 4);
   }
 
   if (pass.pass == pass.FFT_AccGradParameters) {
     CHECK_LE(1, weight.getSize(0));
     CHECK_LE(1, weight.getSize(1));
     CHECK_LE(1, FFTSize);
-
-    // Tune which sizes to use in practice
-    INST_ACC_GRAD_PARAMETERS_ITERATED(1, 1);
+    INST_ACC_GRAD_PARAMETERS_ITERATED(32, 1, 2, 2);
   }
-
-#undef FFTSize
 
   return false;
 }
 
-#undef STATIC_CEIL
 #undef INST_UPDATE_OUTPUT_ITERATED
 #undef INST_UPDATE_GRAD_INPUT_ITERATED
 #undef INST_ACC_GRAD_PARAMETERS_ITERATED
