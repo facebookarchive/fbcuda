@@ -11,8 +11,16 @@ namespace facebook { namespace cuda {
    Computes ceil(a / b)
 */
 template <typename T>
-__host__ __device__ __forceinline__ T ceil(T a, T b) {
+__host__ __device__ __forceinline__ constexpr T ceil(T a, T b) {
   return (a + b - 1) / b;
+}
+
+/**
+   Computes floor(a / b)
+*/
+template <typename T>
+__host__ __device__ __forceinline__ constexpr T floor(T a, T b) {
+  return (a - b + 1) / b;
 }
 
 /**

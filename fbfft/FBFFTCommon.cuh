@@ -6,6 +6,7 @@
 #include "cuda/ComputeCapabilities.cuh"
 #include "cuda/CudaUtils.cuh"
 #include "cuda/DeviceTensor.cuh"
+#include "cuda/MemoryAccess.cuh"
 #include "cuda/fbfft/Twiddles.cuh"
 
 #include <cuda_runtime.h>
@@ -21,22 +22,6 @@ __device__ __host__ T numHermitian(T commonCols) {
 }
 
 namespace detail {
-
-__device__ inline bool inBounds(
-  int y, int x, int padU, int padL, const DeviceTensor<float, 3>& t) {
-  // Rely on unsigned integer arithmetic to test both 0 <= and < t.getSize()
-  // in one shot.
-  return ((unsigned)(y - padU) < (unsigned)(t.getSize(1)) &&
-          (unsigned)(x - padL) < (unsigned)(t.getSize(2)));
-}
-
-__device__ __forceinline__ bool inBounds(
-  int y, int x, int padU, int padL, const DeviceTensor<float, 4>& t) {
-  // Rely on unsigned integer arithmetic to test both 0 <= and < t.getSize()
-  // in one shot.
-  return ((unsigned)(y - padU) < (unsigned)(t.getSize(2)) &&
-          (unsigned)(x - padL) < (unsigned)(t.getSize(3)));
-}
 
 __device__ inline
 unsigned int reverse(unsigned int x, unsigned int nbits) {

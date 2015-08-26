@@ -569,12 +569,6 @@ __global__ void accGradParametersIteratedKernel8(
     scale);
 }
 
-
-
-constexpr int ceil(int num, int denom) {
-  return (num + denom - 1) / denom;
-}
-
 #define INST_UPDATE_OUTPUT_ITERATED(FFTSIZE, BUNROLL, IUNROLL, OUNROLL) \
   {                                                                     \
     dim3 blocks(numTiles,                                               \
