@@ -74,6 +74,13 @@ class DeviceTensor {
                                    const IndexT sizes[Dim],
                                    const IndexT strides[Dim]);
 
+  /// Returns true if the two tensors are of the same dimensionality
+  /// and size.
+  template <int OtherDim>
+  __host__ __device__ bool
+  isSameSize(
+    const DeviceTensor<T, OtherDim, IndexT, PtrTraits>& rhs) const;
+
   /// Returns true if the two tensors are of the same dimensionality,
   /// size and stride.
   template <int OtherDim>

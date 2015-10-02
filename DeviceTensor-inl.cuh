@@ -72,7 +72,7 @@ template <typename T, int Dim,
           typename IndexT, template <typename U> class PtrTraits>
 template <int OtherDim>
 __host__ __device__ bool
-DeviceTensor<T, Dim, IndexT, PtrTraits>::isSameSizeAndStride(
+DeviceTensor<T, Dim, IndexT, PtrTraits>::isSameSize(
   const DeviceTensor<T, OtherDim, IndexT, PtrTraits>& rhs) const {
   if (Dim != OtherDim) {
     return false;
@@ -82,7 +82,22 @@ DeviceTensor<T, Dim, IndexT, PtrTraits>::isSameSizeAndStride(
     if (size_[i] != rhs.size_[i]) {
       return false;
     }
+  }
 
+  return true;
+}
+
+template <typename T, int Dim,
+          typename IndexT, template <typename U> class PtrTraits>
+template <int OtherDim>
+__host__ __device__ bool
+DeviceTensor<T, Dim, IndexT, PtrTraits>::isSameSizeAndStride(
+  const DeviceTensor<T, OtherDim, IndexT, PtrTraits>& rhs) const {
+  if (!isSameSize(rhs)) {
+    return false;
+  }
+
+  for (int i = 0; i < Dim; ++i) {
     if (stride_[i] != rhs.stride_[i]) {
       return false;
     }
