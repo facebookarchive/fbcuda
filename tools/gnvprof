@@ -1,0 +1,19 @@
+#!/bin/bash
+
+set -x
+set -e
+
+LOG_FILE=$(mktemp)
+
+/usr/local/cuda-7.0/bin/nvprof \
+    --csv \
+    --aggregate-mode off \
+    --print-gpu-trace \
+    --print-api-trace \
+    --normalized-time-unit us \
+    --log-file "$LOG_FILE" \
+    -- "$@" > /dev/null
+
+PARSED_LOG=$(mktemp)
+cat "$LOG_FILE" | sed '1,/Profiling result:/d' | head -n -5 > "$PARSED_LOG"
+"$(dirname "$0")/gnvprof.py" "$PARSED_LOG"
