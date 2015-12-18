@@ -614,7 +614,7 @@ __global__ void accGradParametersIteratedKernel8(
 
 
 // A bit awkward but used directly from lua FFI
-typedef struct FFTConvolutionPassFFIStruct {
+typedef struct {
   static const int FFT_UpdateOutput = 0;
   static const int FFT_UpdateGradInput = 1;
   static const int FFT_AccGradParameters = 2;
