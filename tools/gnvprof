@@ -3,13 +3,25 @@
 set -x
 set -e
 
+apitrace=""
+while getopts 'a:' opt ; do
+    case $opt in
+        a)
+            apitrace=--print-api-trace
+            shift;;
+        \?)
+            exit 1
+            ;;
+    esac
+done
+
 LOG_FILE=$(mktemp)
 
 /usr/local/cuda-7.0/bin/nvprof \
     --csv \
     --aggregate-mode off \
     --print-gpu-trace \
-    --print-api-trace \
+    $(echo "$apitrace") \
     --normalized-time-unit us \
     --log-file "$LOG_FILE" \
     -- "$@" > /dev/null
