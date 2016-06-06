@@ -2,6 +2,6 @@
 
 namespace facebook { namespace cuda {
 
-void cudaSleep(THCState *state, int64_t cycles, int type);
+void cudaSleep(int64_t cycles, int type);
 
-}
+} }

@@ -16,8 +16,9 @@ while getopts 'a:' opt ; do
 done
 
 LOG_FILE=$(mktemp)
+LOCK_FILE=/tmp/gnvprof_lock
 
-/usr/local/cuda-7.0/bin/nvprof \
+/usr/local/cuda/bin/nvprof \
     --csv \
     --aggregate-mode off \
     --print-gpu-trace \
@@ -28,4 +29,8 @@ LOG_FILE=$(mktemp)
 
 PARSED_LOG=$(mktemp)
 cat "$LOG_FILE" | sed '1,/Profiling result:/d' | head -n -5 > "$PARSED_LOG"
+# Support concurrent disto processes + nvprof, don't forget to:
+# cat /tmp/disto*out | sed -e "s/\n\]\n\[/,\n/g" > /tmp/prof
+lockfile "$LOCK_FILE"
 "$(dirname "$0")/gnvprof.py" "$PARSED_LOG"
+rm -f "$LOCK_FILE"
