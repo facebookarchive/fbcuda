@@ -1,7 +1,8 @@
 #include <cstdio>
 #include <cuda_runtime_api.h>
 #include <mutex>
-#include <unordered_map>
+// FIXME: nvcc and gcc 4.9 don't like std::unordered_map
+#include <tr1/unordered_map>
 
 #include "util/CachedDeviceProperties.h"
 
@@ -31,7 +32,7 @@ void cudaSleep(int64_t cycles, int type) {
   int device;
   cudaGetDevice(&device);
 
-  static std::unordered_map<int, double*> clocks;
+  static std::tr1::unordered_map<int, double*> clocks;
   auto e = clocks.find(device);
   if (e == clocks.end()) {
     double* c;
