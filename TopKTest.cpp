@@ -2,7 +2,6 @@
 #include "cuda/TopKTestBindings.cuh"
 
 #include <algorithm>
-#include <cuda.h>
 #include <cuda_runtime.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
