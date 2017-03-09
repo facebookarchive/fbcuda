@@ -22,8 +22,8 @@ TEST(WarpReductions, collision) {
 
         // C++11 std::find doesn't work with nvcc now
         bool found = false;
-        for (int i = 0; i < v.size(); ++i) {
-          if (v[i] == r) {
+        for (int j = 0; j < v.size(); ++j) {
+          if (v[j] == r) {
             found = true;
             break;
           }
@@ -61,8 +61,8 @@ TEST(WarpReductions, collisionMask) {
 
         // C++11 std::find doesn't work with nvcc now
         bool found = false;
-        for (int i = 0; i < v.size(); ++i) {
-          if (v[i] == r) {
+        for (int j = 0; j < v.size(); ++j) {
+          if (v[j] == r) {
             found = true;
             break;
           }
