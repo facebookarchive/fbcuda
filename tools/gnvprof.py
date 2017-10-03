@@ -1,4 +1,4 @@
-#!/opt/local/bin/ifbpy --never-use-in-production
+#!/usr/local/bin/ifbpy2 --never-use-in-production
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
