@@ -15,7 +15,7 @@
 #define WARP_SIZE 32
 #define LOG_WARP_SIZE 5
 #define MAX_THREADS_PER_BLOCK 512
-#elif __CUDA_ARCH__ <= 600
+#elif __CUDA_ARCH__ <= 700
 #define WARP_SIZE 32
 #define LOG_WARP_SIZE 5
 #define MAX_THREADS_PER_BLOCK 1024

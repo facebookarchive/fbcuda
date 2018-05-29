@@ -179,11 +179,11 @@ unsigned setBitfield(unsigned val, unsigned toInsert, int pos, int len) {
    `pos`
 */
 __device__ __forceinline__
-unsigned long setBitfield(unsigned long val, unsigned toInsert,
+unsigned long setBitfield(unsigned long val, unsigned long toInsert,
                           int pos, int len) {
   unsigned long ret;
   asm("bfi.b64 %0, %1, %2, %3, %4;" :
-      "=r"(ret) : "l"(toInsert), "l"(val), "r"(pos), "r"(len));
+      "=l"(ret) : "l"(toInsert), "l"(val), "r"(pos), "r"(len));
   return ret;
 }
 
